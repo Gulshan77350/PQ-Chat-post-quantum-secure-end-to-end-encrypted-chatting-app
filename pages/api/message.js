@@ -1,0 +1,184 @@
+import db from "../../lib/db";
+import Message from "../../models/Message";
+import User from "../../models/Users";
+import { getIO, getSocketIdByUsername, getPresenceSnapshot } from "../../lib/socket";
+
+export const config = {
+  api: { bodyParser: { sizeLimit: "10mb" } },
+};
+
+export default async function handler(req, res) {
+  await db();
+
+  switch (req.method) {
+
+    // ── SEND MESSAGE ────────────────────────────────────────────────────────
+    case "POST": {
+      try {
+        const {
+          senderUsername, receiverUsername,
+          text, iv, encryptedKey,           // encrypted text fields
+          mediaData, mediaName, mediaMimeType, mediaSize, mediaIv, mediaKey,
+          type = "text",
+        } = req.body;
+
+        if (!senderUsername || !receiverUsername) {
+          return res.status(400).json({ message: "Missing sender/receiver" });
+        }
+        if (!text && !mediaData) {
+          return res.status(400).json({ message: "Message must have text or media" });
+        }
+
+        const [sender, receiver] = await Promise.all([
+          User.findOne({ username: senderUsername }),
+          User.findOne({ username: receiverUsername }),
+        ]);
+        if (!sender || !receiver) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        const newMessage = await Message.create({
+          sender:   sender._id,
+          receiver: receiver._id,
+          text:         text     || null,
+          iv:           iv       || null,
+          encryptedKey: encryptedKey || null,
+          mediaData,  mediaName,  mediaMimeType,  mediaSize,
+          mediaIv:  mediaIv  || null,
+          mediaKey: mediaKey || null,
+          seen: false,
+          type,
+        });
+
+        const populated = await Message.findById(newMessage._id)
+          .populate("sender",   "username")
+          .populate("receiver", "username")
+          .lean();
+
+        const payload = buildPayload(populated);
+
+        // Real-time delivery
+        try {
+          const io = getIO();
+          const sid = getSocketIdByUsername(receiverUsername);
+          if (sid) io.to(sid).emit("message:new", payload);
+        } catch (e) { console.warn("Socket emit skipped:", e.message); }
+
+        return res.status(201).json({ message: "Sent", data: populated });
+      } catch (err) {
+        console.error(err);
+        return res.status(500).json({ message: "Server error" });
+      }
+    }
+
+    // ── FETCH HISTORY / RECENT CHATS ────────────────────────────────────────
+    case "GET": {
+      try {
+        const { user1, user2, recent } = req.query;
+
+        // Recent chat partners list
+        if (recent && user1) {
+          const user = await User.findOne({ username: user1 });
+          if (!user) return res.status(404).json({ message: "User not found" });
+
+          const recentMsgs = await Message.find({
+            $or: [{ sender: user._id }, { receiver: user._id }],
+          })
+            .populate("sender",   "username")
+            .populate("receiver", "username")
+            .sort({ updatedAt: -1 })
+            .lean();
+
+          const partners = new Map();
+          for (const msg of recentMsgs) {
+            const partner = msg.sender.username === user1 ? msg.receiver : msg.sender;
+            if (!partners.has(partner.username)) partners.set(partner.username, partner);
+          }
+
+          const unseenCounts = await Message.aggregate([
+            { $match: { receiver: user._id, seen: false } },
+            { $group: { _id: "$sender", count: { $sum: 1 } } },
+          ]);
+          const countMap  = new Map(unseenCounts.map(c => [String(c._id), c.count]));
+          const presence  = getPresenceSnapshot();
+
+          const list = await Promise.all(
+            Array.from(partners.entries()).map(async ([uname]) => {
+              const u = await User.findOne({ username: uname }).lean();
+              return {
+                username: uname,
+                unseen:   countMap.get(String(u?._id)) || 0,
+                online:   !!presence[uname],
+              };
+            })
+          );
+          return res.status(200).json(list);
+        }
+
+        // Full chat history between two users
+        if (!user1 || !user2) {
+          return res.status(400).json({ message: "Missing user params" });
+        }
+
+        const [userA, userB] = await Promise.all([
+          User.findOne({ username: user1 }),
+          User.findOne({ username: user2 }),
+        ]);
+        if (!userA || !userB) return res.status(404).json({ message: "User not found" });
+
+        const messages = await Message.find({
+          $or: [
+            { sender: userA._id, receiver: userB._id },
+            { sender: userB._id, receiver: userA._id },
+          ],
+        })
+          .populate("sender",   "username")
+          .populate("receiver", "username")
+          .sort({ createdAt: 1 })
+          .lean();
+
+        // Mark as seen
+        const updated = await Message.updateMany(
+          { sender: userB._id, receiver: userA._id, seen: false },
+          { $set: { seen: true } }
+        );
+        if (updated.modifiedCount > 0) {
+          try {
+            const io  = getIO();
+            const sid = getSocketIdByUsername(user2);
+            if (sid) io.to(sid).emit("messages:seen", { from: user1, by: user1 });
+          } catch (e) { console.warn("Socket emit skipped:", e.message); }
+        }
+
+        return res.status(200).json(messages);
+      } catch (err) {
+        console.error(err);
+        return res.status(500).json({ message: "Server error" });
+      }
+    }
+
+    default:
+      res.setHeader("Allow", ["POST", "GET"]);
+      return res.status(405).end(`Method ${req.method} Not Allowed`);
+  }
+}
+
+function buildPayload(msg) {
+  return {
+    id:            msg._id.toString(),
+    sender:        msg.sender.username,
+    receiver:      msg.receiver.username,
+    text:          msg.text,
+    iv:            msg.iv,
+    encryptedKey:  msg.encryptedKey,
+    mediaData:     msg.mediaData,
+    mediaName:     msg.mediaName,
+    mediaMimeType: msg.mediaMimeType,
+    mediaSize:     msg.mediaSize,
+    mediaIv:       msg.mediaIv,
+    mediaEncKey:   msg.mediaEncKey,
+    type:          msg.type,
+    createdAt:     msg.createdAt,
+    seen:          msg.seen,
+  };
+}
