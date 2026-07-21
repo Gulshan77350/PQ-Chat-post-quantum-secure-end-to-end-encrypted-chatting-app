@@ -17,8 +17,8 @@ export default async function handler(req, res) {
       try {
         const {
           senderUsername, receiverUsername,
-          text, iv, encryptedKey,           // encrypted text fields
-          mediaData, mediaName, mediaMimeType, mediaSize, mediaIv, mediaKey,
+          text, iv, encryptedKey, senderEncryptedKey,           // encrypted text fields
+          mediaData, mediaName, mediaMimeType, mediaSize, mediaIv, mediaEncKey, senderMediaEncKey,
           type = "text",
         } = req.body;
 
@@ -38,14 +38,16 @@ export default async function handler(req, res) {
         }
 
         const newMessage = await Message.create({
-          sender:   sender._id,
-          receiver: receiver._id,
-          text:         text     || null,
-          iv:           iv       || null,
-          encryptedKey: encryptedKey || null,
-          mediaData,  mediaName,  mediaMimeType,  mediaSize,
-          mediaIv:  mediaIv  || null,
-          mediaKey: mediaKey || null,
+          sender:             sender._id,
+          receiver:           receiver._id,
+          text:               text               || null,
+          iv:                 iv                 || null,
+          encryptedKey:       encryptedKey       || null,
+          senderEncryptedKey: senderEncryptedKey || null,
+          mediaData,          mediaName,          mediaMimeType,          mediaSize,
+          mediaIv:            mediaIv            || null,
+          mediaEncKey:        mediaEncKey        || null,
+          senderMediaEncKey:  senderMediaEncKey  || null,
           seen: false,
           type,
         });
@@ -57,11 +59,11 @@ export default async function handler(req, res) {
 
         const payload = buildPayload(populated);
 
-        // Real-time delivery
+        // Real-time delivery via Socket.IO rooms
         try {
           const io = getIO();
-          const sid = getSocketIdByUsername(receiverUsername);
-          if (sid) io.to(sid).emit("message:new", payload);
+          io.to(receiverUsername).emit("message:new", payload);
+          io.to(senderUsername).emit("message:new", payload);
         } catch (e) { console.warn("Socket emit skipped:", e.message); }
 
         return res.status(201).json({ message: "Sent", data: populated });
@@ -165,20 +167,22 @@ export default async function handler(req, res) {
 
 function buildPayload(msg) {
   return {
-    id:            msg._id.toString(),
-    sender:        msg.sender.username,
-    receiver:      msg.receiver.username,
-    text:          msg.text,
-    iv:            msg.iv,
-    encryptedKey:  msg.encryptedKey,
-    mediaData:     msg.mediaData,
-    mediaName:     msg.mediaName,
-    mediaMimeType: msg.mediaMimeType,
-    mediaSize:     msg.mediaSize,
-    mediaIv:       msg.mediaIv,
-    mediaEncKey:   msg.mediaEncKey,
-    type:          msg.type,
-    createdAt:     msg.createdAt,
-    seen:          msg.seen,
+    id:                 msg._id.toString(),
+    sender:             msg.sender.username,
+    receiver:           msg.receiver.username,
+    text:               msg.text,
+    iv:                 msg.iv,
+    encryptedKey:       msg.encryptedKey,
+    senderEncryptedKey: msg.senderEncryptedKey,
+    mediaData:          msg.mediaData,
+    mediaName:          msg.mediaName,
+    mediaMimeType:      msg.mediaMimeType,
+    mediaSize:          msg.mediaSize,
+    mediaIv:            msg.mediaIv,
+    mediaEncKey:        msg.mediaEncKey,
+    senderMediaEncKey:  msg.senderMediaEncKey,
+    type:               msg.type,
+    createdAt:          msg.createdAt,
+    seen:               msg.seen,
   };
 }

@@ -11,6 +11,7 @@ export default function useSocket(username) {
   const onTypingStartRef = useRef(null);
   const onTypingStopRef = useRef(null);
   const onMessagesSeenRef = useRef(null);
+  const onMessagesClearedRef = useRef(null);
   const onConnectedRef = useRef(null);
 
   useEffect(() => {
@@ -83,6 +84,11 @@ export default function useSocket(username) {
       socket.on("messages:seen", (data) => {
         onMessagesSeenRef.current?.(data);
       });
+
+      // 🗑️ Clear message updates
+      socket.on("messages:cleared", (data) => {
+        onMessagesClearedRef.current?.(data);
+      });
     }
 
     // Initialize Socket.IO API route (for Next.js)
@@ -104,6 +110,7 @@ export default function useSocket(username) {
   const onTypingStart = (cb) => { onTypingStartRef.current = cb; };
   const onTypingStop = (cb) => { onTypingStopRef.current = cb; };
   const onMessagesSeen = (cb) => { onMessagesSeenRef.current = cb; };
+  const onMessagesCleared = (cb) => { onMessagesClearedRef.current = cb; };
   const onConnected = (cb) => { onConnectedRef.current = cb; };
 
   return {
@@ -114,6 +121,7 @@ export default function useSocket(username) {
     onTypingStart,
     onTypingStop,
     onMessagesSeen,
+    onMessagesCleared,
     onConnected,
   };
 }

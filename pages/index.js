@@ -1,36 +1,107 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useRouter } from "next/router";
 import toast from "react-hot-toast";
-import { Eye, EyeOff, ShieldCheck, Lock } from "lucide-react";
+import { Eye, EyeOff, ShieldCheck, Lock, Upload, Key, CheckCircle2 } from "lucide-react";
+import { decryptKeyFile, saveSessionPrivateKey, loadPrivateKey } from "../lib/pqcrypto";
 
 export default function Home() {
   const router = useRouter();
+  const fileInputRef = useRef(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [keyFileContent, setKeyFileContent] = useState(null);
+  const [keyFileName, setKeyFileName] = useState("");
+  const [isDragging, setIsDragging] = useState(false);
+
+  const processFile = (file) => {
+    if (!file) return;
+    if (!file.name.endsWith(".pqkey") && !file.name.endsWith(".json")) {
+      toast.error("Please upload a valid .pqkey key file");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        if (!parsed.salt || !parsed.iv || !parsed.encryptedPrivateKey) {
+          toast.error("Invalid .pqkey file structure");
+          return;
+        }
+        setKeyFileContent(parsed);
+        setKeyFileName(file.name);
+        toast.success(`Loaded key file: ${file.name}`);
+      } catch (err) {
+        toast.error("Failed to parse key file");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    processFile(file);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    processFile(file);
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    if (!username.trim() || !password.trim()) { toast.error("Please enter username and password"); return; }
+    const uname = username.trim();
+    if (!uname || !password.trim()) {
+      toast.error("Please enter username and password");
+      return;
+    }
+
+    // Check if key is already in sessionStorage for this username
+    const existingSessionKey = loadPrivateKey(uname);
+    if (!existingSessionKey && !keyFileContent) {
+      toast.error("Please upload your .pqkey file to decrypt messages");
+      return;
+    }
+
     setLoading(true);
     try {
+      // 1. Authenticate credentials with server
       const res = await fetch("/api/users", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username: uname, password }),
       });
       const data = await res.json();
-      if (res.ok) {
-        sessionStorage.setItem("token", data.token);
-        sessionStorage.setItem("username", data.username);
-        toast.success("Welcome back!");
-        router.push("/chat");
-      } else {
+
+      if (!res.ok) {
         toast.error(data.message || "Invalid credentials");
+        setLoading(false);
+        return;
       }
+
+      // 2. Decrypt private key using user's password if not already active in session
+      if (!existingSessionKey && keyFileContent) {
+        try {
+          const decryptedPrivateKey = await decryptKeyFile(password, keyFileContent);
+          saveSessionPrivateKey(data.username, decryptedPrivateKey);
+        } catch (decryptErr) {
+          console.error(decryptErr);
+          toast.error("Key file decryption failed. Check your password and keyfile.");
+          setLoading(false);
+          return;
+        }
+      }
+
+      sessionStorage.setItem("token", data.token);
+      sessionStorage.setItem("username", data.username);
+      toast.success("Authenticated & Key Decrypted!");
+      router.push("/chat");
     } catch (err) {
-      toast.error("Server error. Please try again.");
+      console.error(err);
+      toast.error("Server error during sign in.");
     } finally {
       setLoading(false);
     }
@@ -45,7 +116,7 @@ export default function Home() {
           </div>
           <span className="auth-logo-text">PQChat</span>
         </div>
-        <p className="auth-subtitle">Post-Quantum End-to-End Encrypted Messaging</p>
+        <p className="auth-subtitle">Post-Quantum Non-Custodial Encrypted Messaging</p>
 
         <form onSubmit={handleLogin}>
           <div className="auth-field">
@@ -78,8 +149,41 @@ export default function Home() {
             </div>
           </div>
 
+          {/* KEYFILE UPLOADER */}
+          <div className="auth-field">
+            <label className="auth-label">Private Key (.pqkey file)</label>
+            <div
+              className={`border-2 border-dashed rounded-xl p-3 text-center cursor-pointer transition-all ${
+                isDragging ? "border-emerald-400 bg-emerald-950/40" : "border-emerald-500/20 bg-slate-900/40 hover:border-emerald-500/40"
+              }`}
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pqkey,.json"
+                className="hidden"
+                onChange={handleFileChange}
+              />
+              {keyFileName ? (
+                <div className="flex items-center justify-center gap-2 text-emerald-400 text-sm font-medium">
+                  <CheckCircle2 size={16} />
+                  <span>{keyFileName}</span>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-1 text-xs text-slate-400">
+                  <Key size={18} className="text-emerald-400/80 mb-0.5" />
+                  <span>Drop your <b>.pqkey</b> file here or <span className="text-emerald-400 underline">browse</span></span>
+                </div>
+              )}
+            </div>
+          </div>
+
           <button type="submit" className="auth-btn" disabled={loading}>
-            {loading ? "Authenticating…" : <><Lock size={14} /> Sign In</>}
+            {loading ? "Decrypting Key & Signing In…" : <><Lock size={14} /> Sign In</>}
           </button>
         </form>
 
@@ -93,3 +197,4 @@ export default function Home() {
     </div>
   );
 }
+

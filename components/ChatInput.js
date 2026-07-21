@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Paperclip, Send, X, FileText, Image, Film, Music, ShieldCheck } from "lucide-react";
-import { encryptMessage, encryptMedia } from "../lib/pqcrypto";
+import { encryptMessage, encryptMedia, loadPublicKey } from "../lib/pqcrypto";
 import toast from "react-hot-toast";
 
 const MAX_FILE_SIZE = 8 * 1024 * 1024;
@@ -76,16 +76,40 @@ export default function ChatInput({ receiverUsername, onSend, onSendMedia, onTyp
 
   const clearAttachment = () => { setAttachment(null); setPreview(null); };
 
-  // Fetch receiver's Kyber public key from server
-  const getReceiverPublicKey = async () => {
+  // Fetch public keys for receiver and sender
+  const getPublicKeys = async () => {
+    const senderUsername = sessionStorage.getItem("username");
+    const sessionSenderPk = loadPublicKey(senderUsername);
+
     const res = await fetch(`/api/users`);
     const users = await res.json();
     const receiver = users.find(u => u.username === receiverUsername);
+    const sender   = users.find(u => u.username === senderUsername);
+
     if (!receiver?.publicKey) {
       toast.error("Receiver has no encryption key. Ask them to re-register.");
       return null;
     }
-    return receiver.publicKey;
+
+    const finalSenderPk = sessionSenderPk || sender?.publicKey;
+    if (!finalSenderPk) {
+      toast.error("Sender public key not found.");
+      return null;
+    }
+
+    // Auto-sync sender's public key if DB is out of date
+    if (sessionSenderPk && sender?.publicKey !== sessionSenderPk) {
+      fetch("/api/users/sync-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: senderUsername, publicKey: sessionSenderPk }),
+      }).catch(console.error);
+    }
+
+    return {
+      receiverPublicKey: receiver.publicKey,
+      senderPublicKey: finalSenderPk,
+    };
   };
 
   const handleSend = async () => {
@@ -95,23 +119,27 @@ export default function ChatInput({ receiverUsername, onSend, onSendMedia, onTyp
 
     setSending(true);
     try {
-      const receiverPublicKey = await getReceiverPublicKey();
-      if (!receiverPublicKey) return;
+      const keys = await getPublicKeys();
+      if (!keys || !keys.receiverPublicKey) return;
+      const { receiverPublicKey, senderPublicKey } = keys;
 
       if (attachment) {
-        // Encrypt file with receiver's Kyber public key
-        const { encryptedBase64, iv, encryptedKey } = await encryptMedia(
-          attachment.arrayBuffer, receiverPublicKey
+        // Encrypt file with receiver's and sender's Kyber public keys
+        const { encryptedBase64, iv, encryptedKey, senderEncryptedKey } = await encryptMedia(
+          attachment.arrayBuffer, receiverPublicKey, senderPublicKey
         );
         // Encrypt caption if present
-        let encText = null, textIv = null, textKey = null;
+        let encText = null, textIv = null, textKey = null, senderTextKey = null;
         if (trimmed) {
-          const r = await encryptMessage(trimmed, receiverPublicKey);
-          encText = r.ciphertext; textIv = r.iv; textKey = r.encryptedKey;
+          const r = await encryptMessage(trimmed, receiverPublicKey, senderPublicKey);
+          encText = r.ciphertext;
+          textIv = r.iv;
+          textKey = r.encryptedKey;
+          senderTextKey = r.senderEncryptedKey;
         }
         onSendMedia({
-          text: encText, textIv, textEncryptedKey: textKey,
-          mediaData: encryptedBase64, iv, encryptedKey,
+          text: encText, textIv, textEncryptedKey: textKey, senderTextEncryptedKey: senderTextKey,
+          mediaData: encryptedBase64, iv, encryptedKey, senderMediaEncKey: senderEncryptedKey,
           mediaName: attachment.name, mediaMimeType: attachment.mimeType,
           mediaSize: attachment.size,
           type: attachment.mimeType.startsWith("image/") ? "image"
@@ -121,9 +149,11 @@ export default function ChatInput({ receiverUsername, onSend, onSendMedia, onTyp
         });
         clearAttachment();
       } else {
-        // Encrypt text with receiver's Kyber public key
-        const { ciphertext, iv, encryptedKey } = await encryptMessage(trimmed, receiverPublicKey);
-        onSend({ ciphertext, iv, encryptedKey, plaintext: trimmed });
+        // Encrypt text with receiver's and sender's Kyber public keys
+        const { ciphertext, iv, encryptedKey, senderEncryptedKey } = await encryptMessage(
+          trimmed, receiverPublicKey, senderPublicKey
+        );
+        onSend({ ciphertext, iv, encryptedKey, senderEncryptedKey, plaintext: trimmed });
       }
       setMessage("");
     } catch (err) {

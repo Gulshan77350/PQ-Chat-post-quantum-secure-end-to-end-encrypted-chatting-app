@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from "react";
-import { ShieldCheck, MoreVertical, X } from "lucide-react";
+import { ShieldCheck, MoreVertical, X, KeyRound, Trash2 } from "lucide-react";
 import UserList from "../components/UserList";
 import MessageBubble from "../components/MessageBubble";
 import ChatInput from "../components/ChatInput";
 import { useRouter } from "next/router";
 import toast from "react-hot-toast";
 import useSocket from "../hooks/useSocket";
+import { loadPrivateKey, loadPublicKey } from "../lib/pqcrypto";
 
 export default function Chat() {
   const [username, setUsername] = useState("");
@@ -22,12 +23,30 @@ export default function Chat() {
   const messagesEndRef = useRef(null);
   const dropdownRef = useRef(null);
 
-  const { socket, onMessageNew, onUsersChanged, onPresenceChange, onTypingStart, onTypingStop, onMessagesSeen, onConnected } = useSocket(username);
+  const { socket, onMessageNew, onUsersChanged, onPresenceChange, onTypingStart, onTypingStop, onMessagesSeen, onMessagesCleared, onConnected } = useSocket(username);
 
   useEffect(() => {
     const stored = sessionStorage.getItem("username");
-    if (stored) setUsername(stored);
-    else { toast.error("Please login first"); router.replace("/"); }
+    if (!stored) {
+      toast.error("Please login first");
+      router.replace("/");
+      return;
+    }
+    const privKey = loadPrivateKey(stored);
+    if (!privKey) {
+      toast.error("Private key session expired. Please sign in with your .pqkey file.");
+      router.replace("/");
+      return;
+    }
+    const pubKey = loadPublicKey(stored);
+    if (pubKey) {
+      fetch("/api/users/sync-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: stored, publicKey: pubKey }),
+      }).catch(console.error);
+    }
+    setUsername(stored);
   }, [router]);
 
   const scrollToBottom = (smooth = true) =>
@@ -79,28 +98,62 @@ export default function Chat() {
       movePartnerToTop(partner);
 
       if (selectedUser && partner === selectedUser.username) {
-        setMessages((prev) => [...prev, {
-          sender: { username: msg.sender },
-          receiver: { username: msg.receiver },
-          text: msg.text,
-          iv: msg.iv,
-          encryptedKey: msg.encryptedKey,
-          mediaData: msg.mediaData,
-          mediaIv: msg.mediaIv,
-          mediaEncKey: msg.mediaEncKey,
-          mediaName: msg.mediaName,
-          mediaMimeType: msg.mediaMimeType,
-          mediaSize: msg.mediaSize,
-          type: msg.type,
-          createdAt: msg.createdAt,
-          seen: true,
-        }]);
-        socket?.emit("messages:seen", { from: msg.sender, by: username });
-        fetch("/api/messages/mark-seen", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user1: username, user2: msg.sender }),
-        }).catch(console.error);
+        setMessages((prev) => {
+          if (msg.sender === username) {
+            const hasOptimistic = prev.some((m) => m._optimistic);
+            if (hasOptimistic) {
+              return prev.map((m) => m._optimistic ? {
+                _id: msg.id || msg._id,
+                sender: { username: msg.sender },
+                receiver: { username: msg.receiver },
+                text: msg.text,
+                iv: msg.iv,
+                encryptedKey: msg.encryptedKey,
+                senderEncryptedKey: msg.senderEncryptedKey,
+                mediaData: msg.mediaData,
+                mediaIv: msg.mediaIv,
+                mediaEncKey: msg.mediaEncKey,
+                senderMediaEncKey: msg.senderMediaEncKey,
+                mediaName: msg.mediaName,
+                mediaMimeType: msg.mediaMimeType,
+                mediaSize: msg.mediaSize,
+                type: msg.type,
+                createdAt: msg.createdAt,
+                seen: msg.seen,
+              } : m);
+            }
+          }
+          if (prev.some((m) => (m._id && (m._id === msg.id || m._id === msg._id)))) {
+            return prev;
+          }
+          return [...prev, {
+            _id: msg.id || msg._id,
+            sender: { username: msg.sender },
+            receiver: { username: msg.receiver },
+            text: msg.text,
+            iv: msg.iv,
+            encryptedKey: msg.encryptedKey,
+            senderEncryptedKey: msg.senderEncryptedKey,
+            mediaData: msg.mediaData,
+            mediaIv: msg.mediaIv,
+            mediaEncKey: msg.mediaEncKey,
+            senderMediaEncKey: msg.senderMediaEncKey,
+            mediaName: msg.mediaName,
+            mediaMimeType: msg.mediaMimeType,
+            mediaSize: msg.mediaSize,
+            type: msg.type,
+            createdAt: msg.createdAt,
+            seen: true,
+          }];
+        });
+        if (msg.sender !== username) {
+          socket?.emit("messages:seen", { from: msg.sender, by: username });
+          fetch("/api/messages/mark-seen", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user1: username, user2: msg.sender }),
+          }).catch(console.error);
+        }
         setTimeout(() => scrollToBottom(true), 30);
       } else {
         setRecentUsers((prev) => prev.map((u) => u.username === partner ? { ...u, unseen: (u.unseen || 0) + 1 } : u));
@@ -111,6 +164,12 @@ export default function Chat() {
     onTypingStart(({ from }) => { if (from !== username) { setTypingUser(from); clearTimeout(typingTimeout); } });
     onTypingStop(({ from }) => { if (from !== username) { typingTimeout = setTimeout(() => setTypingUser(null), 500); } });
     onMessagesSeen(({ from }) => { if (from === selectedUser?.username) setMessages((prev) => prev.map((m) => ({ ...m, seen: true }))); });
+    onMessagesCleared(({ by, partner }) => {
+      if (partner === username || partner === selectedUser?.username) {
+        setMessages([]);
+        toast.success("Chat history cleared");
+      }
+    });
 
     return () => clearTimeout(typingTimeout);
   }, [socket, username, selectedUser]);
@@ -149,15 +208,17 @@ export default function Chat() {
     await fetchChatHistory(user);
   };
 
-  const handleSend = async ({ ciphertext, iv, encryptedKey, plaintext }) => {
+  const handleSend = async ({ ciphertext, iv, encryptedKey, senderEncryptedKey, plaintext }) => {
     if (!selectedUser || !ciphertext) return;
+    try { localStorage.setItem("pqc_sent_" + ciphertext, plaintext); } catch (e) {}
     // Optimistic update — show plaintext for sender, ciphertext stored in DB
     setMessages((prev) => [...prev, {
       sender: { username },
       receiver: { username: selectedUser.username },
       text: plaintext,
-      iv:null,
-      encryptedKey:null,
+      iv: null,
+      encryptedKey: null,
+      senderEncryptedKey: null,
       type: "text",
       createdAt: new Date().toISOString(),
       _optimistic: true,
@@ -174,12 +235,13 @@ export default function Chat() {
           text: ciphertext,
           iv,
           encryptedKey,
+          senderEncryptedKey,
         }),
       });
     } catch (err) { console.error(err); }
   };
 
-  const handleSendMedia = async ({ text, textIv, textEncryptedKey, mediaData, iv, encryptedKey, mediaName, mediaMimeType, mediaSize, type }) => {
+  const handleSendMedia = async ({ text, textIv, textEncryptedKey, senderTextEncryptedKey, mediaData, iv, encryptedKey, senderMediaEncKey, mediaName, mediaMimeType, mediaSize, type }) => {
     if (!selectedUser) return;
     setMessages((prev) => [...prev, {
       sender: { username },
@@ -187,9 +249,11 @@ export default function Chat() {
       text,
       iv: textIv,
       encryptedKey: textEncryptedKey,
+      senderEncryptedKey: senderTextEncryptedKey,
       mediaData,
       mediaIv: iv,
       mediaEncKey: encryptedKey,
+      senderMediaEncKey,
       mediaName,
       mediaMimeType,
       mediaSize,
@@ -208,9 +272,11 @@ export default function Chat() {
           text,
           iv: textIv,
           encryptedKey: textEncryptedKey,
+          senderEncryptedKey: senderTextEncryptedKey,
           mediaData,
           mediaIv: iv,
           mediaEncKey: encryptedKey,
+          senderMediaEncKey,
           mediaName,
           mediaMimeType,
           mediaSize,
@@ -218,6 +284,30 @@ export default function Chat() {
         }),
       });
     } catch (err) { console.error(err); }
+  };
+
+  const handleClearChat = async () => {
+    if (!selectedUser) return;
+    if (!confirm(`Are you sure you want to clear all chat history with ${selectedUser.username}? This will permanently delete messages from the database.`)) {
+      return;
+    }
+    setShowDropdown(false);
+    try {
+      const res = await fetch("/api/messages/clear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user1: username, user2: selectedUser.username }),
+      });
+      if (res.ok) {
+        setMessages([]);
+        toast.success("Chat history cleared from database");
+      } else {
+        toast.error("Failed to clear chat");
+      }
+    } catch (err) {
+      console.error("Clear chat error:", err);
+      toast.error("Failed to clear chat");
+    }
   };
 
   useEffect(() => {
@@ -235,6 +325,7 @@ export default function Chat() {
 
   return (
     <div className="app-shell">
+      {/* SIDEBAR */}
       <UserList
         users={recentUsers}
         allUsers={allUsers}
@@ -244,11 +335,12 @@ export default function Chat() {
         onSelectUser={handleSelectUser}
       />
 
-      <main className="chat-main">
+      {/* CHAT MAIN */}
+      <div className="chat-main">
         {selectedUser ? (
           <>
             {/* HEADER */}
-            <header className="chat-header">
+            <div className="chat-header">
               <div className="chat-header-left">
                 <div className="chat-avatar">
                   {selectedUser.username[0]?.toUpperCase()}
@@ -266,8 +358,8 @@ export default function Chat() {
 
               <div className="chat-header-right">
                 <div className="e2e-pill">
-                  <ShieldCheck size={12} />
-                  <span>Post-Quantum E2E</span>
+                  <KeyRound size={12} className="text-emerald-400" />
+                  <span>PQC Non-Custodial</span>
                 </div>
 
                 <div ref={dropdownRef} className="relative">
@@ -276,6 +368,9 @@ export default function Chat() {
                   </button>
                   {showDropdown && (
                     <div className="header-dropdown">
+                      <button onClick={handleClearChat} className="dropdown-item text-rose-400 hover:text-rose-300">
+                        <Trash2 size={14} /> Clear Chat
+                      </button>
                       <button onClick={() => { setSelectedUser(null); setMessages([]); setShowDropdown(false); }} className="dropdown-item">
                         <X size={14} /> Close Chat
                       </button>
@@ -283,28 +378,30 @@ export default function Chat() {
                   )}
                 </div>
               </div>
-            </header>
+            </div>
 
             {/* MESSAGES */}
-            <div className="messages-area" ref={chatContainerRef}>
+            <div ref={chatContainerRef} className="messages-area">
               {loadingMessages ? (
                 <div className="msg-loading">
-                  <span className="loading-dots"><span/><span/><span/></span>
+                  <span className="spinner" />
                 </div>
               ) : messages.length > 0 ? (
                 messages.map((msg, i) => (
                   <MessageBubble
-                    key={i}
+                    key={msg._id || i}
                     text={msg.text}
                     iv={msg.iv}
                     encryptedKey={msg.encryptedKey}
+                    senderEncryptedKey={msg.senderEncryptedKey}
                     from={msg.sender?.username === username ? "me" : msg.sender?.username}
-                    createdAt={msg.createdAt}
                     seen={msg.seen}
+                    createdAt={msg.createdAt}
                     type={msg.type}
                     mediaData={msg.mediaData}
                     mediaIv={msg.mediaIv}
                     mediaEncKey={msg.mediaEncKey}
+                    senderMediaEncKey={msg.senderMediaEncKey}
                     mediaMimeType={msg.mediaMimeType}
                     mediaName={msg.mediaName}
                     mediaSize={msg.mediaSize}
@@ -350,7 +447,7 @@ export default function Chat() {
             <p>Messages and files are secured with CRYSTALS-Kyber post-quantum encryption</p>
           </div>
         )}
-      </main>
+      </div>
     </div>
   );
 }

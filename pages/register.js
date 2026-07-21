@@ -1,8 +1,8 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
-import { Eye, EyeOff, ShieldCheck, UserPlus } from "lucide-react";
+import { Eye, EyeOff, ShieldCheck, UserPlus, Download } from "lucide-react";
 import { useRouter } from "next/router";
-import { generateKeyPair, saveKeyPair, toB64 } from "../lib/pqcrypto";
+import { generateKeyPair, exportEncryptedKeyFile, saveSessionPrivateKey, toB64 } from "../lib/pqcrypto";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -12,6 +12,18 @@ export default function RegisterPage() {
   const [loading, setLoading]           = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm]   = useState(false);
+
+  const triggerDownload = (filename, textContent) => {
+    const blob = new Blob([textContent], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const handleRegister = async (e) => {
     e.preventDefault();
@@ -26,25 +38,36 @@ export default function RegisterPage() {
       // 1. Generate Kyber-512 keypair in browser
       const { publicKey, privateKey } = await generateKeyPair();
 
-      // 2. Save privateKey ONLY to localStorage — never sent to server
-      saveKeyPair(username, publicKey, privateKey);
+      // 2. Encrypt private key with password using PBKDF2 + AES-GCM
+      const keyFileObj = await exportEncryptedKeyFile(username.trim(), password, privateKey);
+      const keyFileJSON = JSON.stringify(keyFileObj, null, 2);
 
-      // 3. Register — send publicKey to server (safe, it's public)
+      // 3. Trigger .pqkey file download to user's system
+      triggerDownload(`pqchat_${username.trim()}.pqkey`, keyFileJSON);
+
+      // 4. Save in sessionStorage for current session
+      saveSessionPrivateKey(username.trim(), privateKey);
+
+      // 5. Register with backend API — send ONLY public key
       const res = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username,
+          username: username.trim(),
           password,
           publicKey: toB64(publicKey),
         }),
       });
       const data = await res.json();
-      if (res.ok) { toast.success("Account created!"); router.push("/"); }
-      else toast.error(data.message || "Registration failed");
+      if (res.ok) {
+        toast.success("Account created! Save your downloaded .pqkey file securely.");
+        router.push("/");
+      } else {
+        toast.error(data.message || "Registration failed");
+      }
     } catch (err) {
       console.error(err);
-      toast.error("Error during registration");
+      toast.error("Error during registration & key generation");
     } finally {
       setLoading(false);
     }
@@ -59,7 +82,11 @@ export default function RegisterPage() {
           </div>
           <span className="auth-logo-text">PQChat</span>
         </div>
-        <p className="auth-subtitle">Create your encrypted account</p>
+        <p className="auth-subtitle">Create your post-quantum encrypted account</p>
+        <div className="text-xs text-emerald-400/90 bg-emerald-950/40 border border-emerald-500/20 p-2.5 rounded-lg mb-4 flex items-start gap-2">
+          <Download size={16} className="mt-0.5 shrink-0 text-emerald-400" />
+          <span>Registration generates a passphrase-wrapped <b>.pqkey</b> file downloaded to your system for non-custodial login.</span>
+        </div>
 
         <form onSubmit={handleRegister}>
           <div className="auth-field">

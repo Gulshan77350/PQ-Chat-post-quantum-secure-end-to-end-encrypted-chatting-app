@@ -19,7 +19,7 @@ function getFileIcon(mimeType) {
 }
 
 // ── Media renderer ────────────────────────────────────────────
-function MediaContent({ mediaData, mediaIv, mediaEncKey, mediaMimeType, mediaName, mediaSize, currentUser }) {
+function MediaContent({ mediaData, mediaIv, mediaEncKey, senderMediaEncKey, mediaMimeType, mediaName, mediaSize, currentUser, isMe }) {
   const [objectUrl, setObjectUrl] = useState(null);
   const [loading, setLoading]     = useState(true);
   const [expanded, setExpanded]   = useState(false);
@@ -29,11 +29,11 @@ function MediaContent({ mediaData, mediaIv, mediaEncKey, mediaMimeType, mediaNam
       setLoading(false);
       return;
     }
-    decryptMediaData(mediaData, mediaIv, mediaEncKey, mediaMimeType, currentUser)
+    decryptMediaData(mediaData, mediaIv, mediaEncKey, mediaMimeType, currentUser, senderMediaEncKey, isMe)
       .then(url => { setObjectUrl(url); setLoading(false); });
 
     return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [mediaData, mediaIv, mediaEncKey, currentUser]);
+  }, [mediaData, mediaIv, mediaEncKey, senderMediaEncKey, currentUser, isMe]);
 
   const handleDownload = () => {
     if (!objectUrl) return;
@@ -77,9 +77,9 @@ function MediaContent({ mediaData, mediaIv, mediaEncKey, mediaMimeType, mediaNam
 
 // ── MessageBubble ─────────────────────────────────────────────
 export default function MessageBubble({
-  text, iv, encryptedKey,
+  text, iv, encryptedKey, senderEncryptedKey,
   from, seen = false, createdAt, type,
-  mediaData, mediaIv, mediaEncKey, mediaMimeType, mediaName, mediaSize,
+  mediaData, mediaIv, mediaEncKey, senderMediaEncKey, mediaMimeType, mediaName, mediaSize,
   currentUser,
 }) {
   const isMe = from === "me";
@@ -100,12 +100,21 @@ export default function MessageBubble({
       return;
     }
 
-    decryptMessage(text, iv, encryptedKey, currentUser)
+    decryptMessage(text, iv, encryptedKey, currentUser, senderEncryptedKey, isMe)
       .then(result => {
-        if (result !== null) setPlaintext(result);
-        else setDecryptFailed(true);
+        if (result !== null) {
+          setPlaintext(result);
+        } else {
+          // Check local client sent cache if available
+          const localSent = isMe ? localStorage.getItem("pqc_sent_" + text) : null;
+          if (localSent) {
+            setPlaintext(localSent);
+          } else {
+            setDecryptFailed(true);
+          }
+        }
       });
-  }, [text, iv, encryptedKey, currentUser]);
+  }, [text, iv, encryptedKey, senderEncryptedKey, currentUser, isMe]);
 
   const formattedTime = createdAt
     ? new Date(createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -126,10 +135,12 @@ export default function MessageBubble({
             mediaData={mediaData}
             mediaIv={mediaIv}
             mediaEncKey={mediaEncKey}
+            senderMediaEncKey={senderMediaEncKey}
             mediaMimeType={mediaMimeType}
             mediaName={mediaName}
             mediaSize={mediaSize}
             currentUser={currentUser}
+            isMe={isMe}
           />
         )}
 
@@ -139,7 +150,7 @@ export default function MessageBubble({
             ? <p className="bubble-text">{plaintext}</p>
             : decryptFailed
               ? <p className="bubble-text" style={{ opacity: 0.4, fontStyle: "italic", fontSize: "12px" }}>
-                  🔒 [Message unrecoverable — sender re-registered]
+                  🔒 [Message encrypted under a previous keypair]
                 </p>
               : <p className="bubble-text" style={{ opacity: 0.4, fontSize: "12px" }}>
                   🔓 decrypting…
@@ -148,12 +159,6 @@ export default function MessageBubble({
 
         {/* Footer */}
         <div className={`bubble-footer ${isMe ? "bubble-footer-me" : "bubble-footer-them"}`}>
-          {(mediaData || iv) && (
-            <span className="e2e-badge">
-              <ShieldCheck size={9} className="inline mr-0.5" />
-              Kyber+AES
-            </span>
-          )}
           <span className="bubble-time">{formattedTime}</span>
           {isMe && (seen
             ? <CheckCheck size={13} className="seen-icon seen" />

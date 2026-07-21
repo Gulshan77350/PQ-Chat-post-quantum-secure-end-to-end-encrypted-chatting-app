@@ -1,169 +1,110 @@
-# 💬 Real-Time Chat Application
+# 🔐 PQ-Chat: Post-Quantum Secure End-to-End Encrypted (E2EE) Chat
 
-A modern **one-to-one real-time chat application** built with **Next.js, MongoDB, and Socket.io**.  
-It supports **user registration, login, persistent chat history, and instant message delivery** using WebSockets.
+A state-of-the-art **Non-Custodial, Post-Quantum Secure End-to-End Encrypted Real-Time Chat Platform** built with **Next.js, Node.js, Socket.IO, MongoDB, and NIST-Standardized ML-KEM-512 (Kyber-512) Cryptography**.
 
+---
 
-## 🧭 Project Overview
+## 🌟 Key Highlights & Security Architecture
 
-This project demonstrates how to build a **full-stack chat app** that allows registered users to:
-- Send and receive messages in real time using Socket.io.
-- Maintain message history stored in MongoDB.
-- Search list of all registered users.
-- See recent chat contacts automatically sorted by activity.
-- Enjoy seamless synchronization between multiple clients.
+- **🔒 Post-Quantum Encryption (ML-KEM-512 / Kyber-512)**: Uses NIST-standardized quantum-resistant lattice algorithms for asymmetric key encapsulation combined with AES-GCM (256-bit) for symmetric payload encryption.
+- **🔑 PGP-Style Non-Custodial Key Architecture**: Private keys are generated entirely in the browser and wrapped via PBKDF2 (100,000 iterations) + AES-GCM into downloadable `.pqkey` passphrase-protected files. Private keys **never** touch network traffic or database storage.
+- **⚡ Dual-Recipient Key Encapsulation**: Payload keys are encapsulated for **both** sender and receiver, enabling non-custodial sender message persistence across session reloads and multi-tab sync.
+- **💬 Real-Time Engine**: Built on Socket.IO room-based dynamic subscriptions (`socket.join(username)`), providing instant message delivery, live presence tracking, seen receipts, and typing indicators.
+- **🗑️ Zero-Trace Clear Chat**: Direct database conversation purging with real-time socket propagation across active tabs.
 
-The app combines REST APIs for persistence and Socket.io for real-time bi-directional communication.
+---
 
+## 🛠️ Tech Stack
 
-## ⚙️ Installation & Running Locally
+| Domain | Technologies |
+| :--- | :--- |
+| **Frontend** | React, Next.js (Page Router), Framer Motion, Lucide Icons, Vanilla CSS |
+| **Cryptography** | `crystals-kyber-js` (ML-KEM-512 / Kyber), Web Crypto API (PBKDF2, AES-GCM) |
+| **Backend & Real-Time** | Node.js, Express, Socket.IO (WebSockets), Next.js API Routes |
+| **Database** | MongoDB & Mongoose (Indexed Schemas) |
+| **Authentication** | Passphrase-Derived Key Wrapping + JWT (JSON Web Tokens) |
 
-### 🧩 Prerequisites
-| Tool                                                      | Description                               | Version |
-| --------------------------------------------------------- | ----------------------------------------- | ------- |
-| [Node.js](https://nodejs.org/)                            | JavaScript runtime for backend            | >= 20.9.x |
-| [MongoDB](https://www.mongodb.com/try/download/community) | Database for storing user data & messages | Latest  |
+---
 
+## 🚀 How to Run the Application on Any System
 
-### 1️⃣ Clone the repository
+Follow these simple steps to set up and run **PQ-Chat** on Linux, macOS, or Windows.
+
+### 📋 Prerequisites
+
+Make sure you have installed:
+1. **Node.js**: `v18.x` or higher (`v20.x` recommended) — [Download Node.js](https://nodejs.org/)
+2. **MongoDB**: Local MongoDB instance (`mongodb://127.0.0.1:27017`) OR a free [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) connection URI.
+
+---
+
+### 1️⃣ Clone the Repository & Install Dependencies
+
 ```bash
-git clone https://github.com/MTech-IT-MNS-2025/Group-3.git
-cd Assignment_3
-```
-### 2️⃣ Install dependencies
+git clone https://github.com/Gulshan77350/PQ-Chat-post-quantum-secure-end-to-end-encrypted-chatting-app.git
+cd PQ-Chat-post-quantum-secure-end-to-end-encrypted-chatting-app
 
-```bash
+# Install all dependencies
 npm install
 ```
-### 3️⃣ Configure environment variables
-Create a .env.local file in the project root:
+
+---
+
+### 2️⃣ Configure Environment Variables
+
+Create a `.env.local` file in the root directory:
+
 ```bash
-MONGO_URI={mongodblink}
-
-# For offline (organization LAN) set USE_ONLINE_DB=false
-
-# For online
-USE_ONLINE_DB=true
+# For Local MongoDB (Default)
+MONGO_URI=mongodb://127.0.0.1:27017/pqchat
+MONGO_URI_LOCAL=mongodb://127.0.0.1:27017/pqchat
+USE_ONLINE_DB=false
 PORT=3000
-JWT_SECRET={your-very-secure-secret}
+JWT_SECRET=supersecretpqchatkey2026
+
+# OR For Online MongoDB Atlas (Set USE_ONLINE_DB=true)
+# MONGO_URI=mongodb+srv://<username>:<password>@cluster.mongodb.net/pqchat
+# USE_ONLINE_DB=true
 ```
 
-### 4️⃣ Run in development
+---
+
+### 3️⃣ Run the Application
+
+#### 🔹 Option A: Production Mode (Recommended)
+Build the Next.js bundle and start the custom Express + Socket.IO server:
+
 ```bash
 npm run build
 npm start
 ```
 
-### 5️⃣ Open in browser
-Visit:
-👉 http://localhost:3000
+#### 🔹 Option B: Development Mode
+Run with live reloading enabled:
 
-
-## 🖼️ Screenshots
-### 📸 Login Interface
-![login](./public/screenshots/login.png)
-### 📸 Register Interface
-![register](./public/screenshots/register.png)
-### 📸 Forgot Password Interface
-![forgotpwd](./public/screenshots/forgotpassword.png)
-### 📸 Chat Interface
-![Chat](./public/screenshots/chat_1.png)
-![Chat](./public/screenshots/chat_2.png)
-### 📸 Mongodb
-![mongo](./public/screenshots/mongo.png)
-
----
-
-
-## 🏗️ Architecture Overview
-``` text
-chat-app/
-├── components/
-│ ├── ChatInput.js 			 # Chat text input box with typing and send functionality
-│ ├── MessageBubble.js 	     # Displays individual chat messages (sent/received)
-│ └── UserList.js 			 # Sidebar list showing users, unread count, and online status
-│
-├── hooks/
-│ └── useSocket.js 			 # Custom React Hook for managing Socket.IO client connection
-│
-├── lib/
-│ ├── db.js 			  	 # MongoDB connection helper using Mongoose
-│ └── socket.js 		     # Socket.IO server setup and real-time presence management
-│
-├── models/
-│ ├── Message.js 			 # Message schema: sender, receiver, text, seen/unseen tracking
-│ └── Users.js 				 # User schema: username, password, online status, lastSeen, etc.
-│
-├── pages/
-│ ├── api/ 					 # Backend API routes (handled by Next.js)
-│ │ ├── message.js 			 # Send and fetch messages API
-│ │ ├── messages/
-│ │ │ └── mark-seen.js 	     # Marks messages as seen (updates DB + emits socket event)
-│ │ ├── socket.js 			 # Initializes the Socket.IO server (used by frontend)
-│ │ └── users.js 		     # Handles user registration, login, and user fetching
-│ │
-│ ├── _app.js 			     # Root wrapper for all pages (global styles, dark mode, toaster)
-│ ├── chat.js 			     # Main chat UI page with socket events and message rendering
-│ ├── forgot_password.js     # Forgot password page (optional for recovery feature)
-│ ├── index.js 				 # Login page (entry point for users)
-│ └── register.js 			 # Registration page for new users
-│
-├── styles/
-│ └── global.css 		     # TailwindCSS base styles and dark mode configuration
-│
-├── server.js 			     # Custom Express + Socket.IO server (runs Next.js app)
-├── public/
-│   └── screenshots/         # App interface screenshots or static assets
-|
-├── next.config.js 		     # Next.js configuration file (build settings, optimizations)
-├── tailwind.config.js 	     # TailwindCSS configuration (themes, dark mode, colors)
-├── postcss.config.js 	     # PostCSS setup for TailwindCSS processing
-│
-├── package.json 			 # Project dependencies, scripts, and metadata
-├── package-lock.json 	     # Locked dependency versions for consistent installs
-└── Readme.md 				 # Documentation, setup instructions, and developer guide
+```bash
+npm run dev
 ```
 
+---
 
-## 🧰 Technologies Used
+### 4️⃣ Access the Chat Application
 
-| **Category**     | **Technology**               | **Purpose** |
-|------------------|-----------------------------|--------------|
-| **Frontend**     | Next.js (React + SSR)        | UI rendering, routing, API handling |
-| **Backend**      | Node.js + Next.js API Routes | API logic for users & messages |
-| **Database**     | MongoDB + Mongoose           | Persistent user/message storage |
-| **Real-time**    | Socket.IO                    | Live messaging, typing, presence |
-| **Auth**         | JWT (JSON Web Token)         | User authentication |
-| **Styling**      | TailwindCSS + Dark Mode      | Responsive and modern UI design |
+Open your browser and navigate to:
+👉 **`http://localhost:3000`**
 
 ---
 
-## 🌐 Key Features
-✅ Real-time messaging via Socket.IO  
-✅ Online/offline presence tracking  
-✅ Message seen/unseen tracking  
-✅ Typing indicator updates  
-✅ JWT-based authentication  
-✅ Dark/light theme toggle  
-✅ Responsive UI using TailwindCSS  
-✅ Scalable structure for future expansion  
+## 💡 How to Test PQC E2EE Messaging
+
+1. **Register User A**: Click **Register**, enter a username (e.g. `alice`) and passphrase. The browser will automatically generate a Kyber keypair and download `pqchat_alice.pqkey`.
+2. **Register User B**: In a new tab/browser window, register User B (e.g. `bob`). Download `pqchat_bob.pqkey`.
+3. **Login**: Login with credentials and select your `.pqkey` file to unlock your local session key.
+4. **Chat in Real-Time**: Select the user from the sidebar and send encrypted messages.
+5. **Verify Non-Custodial Persistence**: Refresh the browser page — sent and received messages remain fully persistent and decrypted seamlessly using local Kyber key decapsulation!
 
 ---
-
-
-## 📚 Learning Outcomes
-
-Through this project, you will learn:
-
-+ How to integrate Socket.io with Next.js for real-time features. 
-+ How to structure a full-stack Next.js application with APIs, DB, and sockets. 
-+ How to persist chat data in MongoDB and retrieve conversation history. 
-+ How to design React components for chat interfaces (UserList, ChatWindow). 
-+ How to manage authentication using JWT. 
-+ How to prepare and deploy a full-stack app to production.
 
 ## 📜 License
-This project is licensed under the MIT License.  
-See the [LICENSE](../LICENSE) file for details.
 
----
+Distributed under the MIT License. See `LICENSE` for more information.
