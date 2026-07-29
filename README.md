@@ -13,15 +13,12 @@
 
 | 1. Non-Custodial Login | 2. Account Registration & Password Strength |
 | :---: | :---: |
-| ![Login Page](screenshots/1_login.png) | ![Registration Page](screenshots/2_register.png) |
+| ![Login Page](screenshots/Screenshot from 2026-07-29 18-05-56.png) | ![Registration Page](screenshots/Screenshot from 2026-07-29 18-06-05.png) |
 
-| 3. Real-Time Encrypted Chat UI | 4. Out-of-Band Safety Number Modal |
+| 3. Real-Time Encrypted Chat UI | 4. Account Password Reset |
 | :---: | :---: |
-| ![Chat Interface](screenshots/3_chat.png) | ![Safety Number Verification](screenshots/4_safety_number.png) |
+| ![Chat Interface](screenshots/Screenshot from 2026-07-29 17-59-02.png) | ![Forgot Password](screenshots/Screenshot from 2026-07-29 18-14-58.png) |
 
-| 5. Cursor-Based Message History Pagination | 6. Account Password Reset |
-| :---: | :---: |
-| ![Message History Pagination](screenshots/5_pagination.png) | ![Forgot Password](screenshots/6_forgot_password.png) |
 
 ---
 
