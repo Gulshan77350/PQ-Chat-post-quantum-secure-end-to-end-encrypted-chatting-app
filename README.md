@@ -13,11 +13,11 @@
 
 | 1. Non-Custodial Login | 2. Account Registration & Password Strength |
 | :---: | :---: |
-| ![Login Page](screenshots/Screenshot from 2026-07-29 18-05-56.png) | ![Registration Page](screenshots/Screenshot from 2026-07-29 18-06-05.png) |
+| ![Login Page](screenshots/Screenshot%20from%202026-07-29%2018-05-56.png) | ![Registration Page](screenshots/Screenshot%20from%202026-07-29%2018-06-05.png) |
 
 | 3. Real-Time Encrypted Chat UI | 4. Account Password Reset |
 | :---: | :---: |
-| ![Chat Interface](screenshots/Screenshot from 2026-07-29 17-59-02.png) | ![Forgot Password](screenshots/Screenshot from 2026-07-29 18-14-58.png) |
+| ![Chat Interface](screenshots/Screenshot%20from%202026-07-29%2017-59-02.png) | ![Forgot Password](screenshots/Screenshot%20from%202026-07-29%2018-14-58.png) |
 
 
 ---
