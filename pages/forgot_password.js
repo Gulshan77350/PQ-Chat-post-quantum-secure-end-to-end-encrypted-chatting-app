@@ -1,6 +1,6 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
-import { FaEye, FaEyeSlash } from "react-icons/fa";
+import { Eye, EyeOff, ShieldCheck, KeyRound } from "lucide-react";
 import { useRouter } from "next/router";
 
 export default function ForgotPassword() {
@@ -13,6 +13,24 @@ export default function ForgotPassword() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
+  const getPasswordStrength = (pass) => {
+    if (!pass) return { label: "", score: 0, color: "", barColor: "" };
+    if (pass.length < 6) return { label: "Too short (min 6 chars)", score: 1, color: "text-rose-400", barColor: "bg-rose-500" };
+    
+    let score = 0;
+    if (pass.length >= 6) score++;
+    if (pass.length >= 8) score++;
+    if (/[A-Z]/.test(pass)) score++;
+    if (/[0-9]/.test(pass)) score++;
+    if (/[^A-Za-z0-9]/.test(pass)) score++;
+
+    if (score <= 2) return { label: "Weak", score: 1, color: "text-amber-400", barColor: "bg-amber-500" };
+    if (score <= 4) return { label: "Medium", score: 2, color: "text-emerald-400", barColor: "bg-emerald-400" };
+    return { label: "Strong", score: 3, color: "text-emerald-300", barColor: "bg-emerald-300" };
+  };
+
+  const strength = getPasswordStrength(newPassword);
+
   const handleReset = async (e) => {
     e.preventDefault();
 
@@ -21,13 +39,13 @@ export default function ForgotPassword() {
       return;
     }
 
-    if (newPassword !== confirm) {
-      toast.error("Passwords do not match!");
+    if (newPassword.length < 6) {
+      toast.error("Password must be at least 6 characters long");
       return;
     }
 
-    if (newPassword.length < 6) {
-      toast.error("Password must be at least 6 characters long");
+    if (newPassword !== confirm) {
+      toast.error("Passwords do not match!");
       return;
     }
 
@@ -36,13 +54,13 @@ export default function ForgotPassword() {
       const res = await fetch("/api/users", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, newPassword }),
+        body: JSON.stringify({ username: username.trim(), newPassword }),
       });
 
       const data = await res.json();
 
       if (res.ok) {
-        toast.success("Password reset successful!");
+        toast.success("Password reset successful! Redirecting to login...");
         setUsername("");
         setNewPassword("");
         setConfirm("");
@@ -59,79 +77,104 @@ export default function ForgotPassword() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100">
-      <form
-        onSubmit={handleReset}
-        className="bg-white p-8 rounded-2xl shadow-md w-96 border border-gray-200"
-      >
-        <h2 className="text-2xl font-bold mb-4 text-center text-gray-800">
-          Reset Password
-        </h2>
-
-        <input
-          type="text"
-          placeholder="Username"
-          className="w-full border border-gray-400 p-2 mb-4 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
-
-        {/* New Password */}
-        <div className="relative mb-4">
-          <input
-            type={showPassword ? "text" : "password"}
-            placeholder="New Password"
-            className="w-full border border-gray-400 p-2 pr-10 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-          />
-          <span
-            onClick={() => setShowPassword(!showPassword)}
-            className="absolute right-3 top-1/2 transform -translate-y-1/2 cursor-pointer text-gray-500"
-          >
-            {showPassword ? <FaEyeSlash /> : <FaEye />}
-          </span>
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-logo">
+          <div className="auth-logo-icon">
+            <ShieldCheck size={22} color="#6ee7b7" />
+          </div>
+          <span className="auth-logo-text">PQChat</span>
         </div>
+        <p className="auth-subtitle">Reset your account password</p>
 
-        {/* Confirm Password */}
-        <div className="relative mb-6">
-          <input
-            type={showConfirm ? "text" : "password"}
-            placeholder="Confirm Password"
-            className="w-full border border-gray-400 p-2 pr-10 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-          />
-          <span
-            onClick={() => setShowConfirm(!showConfirm)}
-            className="absolute right-3 top-1/2 transform -translate-y-1/2 cursor-pointer text-gray-500"
-          >
-            {showConfirm ? <FaEyeSlash /> : <FaEye />}
-          </span>
+        <form onSubmit={handleReset}>
+          <div className="auth-field">
+            <label className="auth-label">Username</label>
+            <input
+              className="auth-input"
+              type="text"
+              placeholder="your_username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </div>
+
+          <div className="auth-field">
+            <label className="auth-label">New Password</label>
+            <div className="auth-input-wrap">
+              <input
+                className="auth-input"
+                type={showPassword ? "text" : "password"}
+                placeholder="••••••••"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                style={{ paddingRight: "40px" }}
+              />
+              <button
+                type="button"
+                className="auth-eye"
+                onClick={() => setShowPassword((s) => !s)}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+
+          <div className="auth-field">
+            <label className="auth-label">Confirm Password</label>
+            <div className="auth-input-wrap">
+              <input
+                className="auth-input"
+                type={showConfirm ? "text" : "password"}
+                placeholder="••••••••"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                style={{ paddingRight: "40px" }}
+              />
+              <button
+                type="button"
+                className="auth-eye"
+                onClick={() => setShowConfirm((s) => !s)}
+              >
+                {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+
+          {/* PASSWORD STRENGTH INDICATOR NEAR SUBMIT BUTTON */}
+          {newPassword && (
+            <div className="mb-3 px-1">
+              <div className="flex items-center justify-between text-xs mb-1">
+                <span className="text-slate-400">Password strength:</span>
+                <span className={`font-semibold ${strength.color}`}>{strength.label}</span>
+              </div>
+              <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden flex">
+                <div
+                  className={`h-full transition-all duration-300 ${strength.barColor}`}
+                  style={{ width: `${(strength.score / 3) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          <button type="submit" className="auth-btn" disabled={loading}>
+            {loading ? (
+              "Resetting password…"
+            ) : (
+              <>
+                <KeyRound size={14} /> Reset Password
+              </>
+            )}
+          </button>
+        </form>
+
+        <p className="auth-divider">Remembered your password?</p>
+        <div style={{ textAlign: "center" }}>
+          <button className="auth-link-btn" onClick={() => router.push("/")}>
+            Sign in
+          </button>
         </div>
-
-        {/* Reset Button */}
-        <button
-          type="submit"
-          disabled={loading}
-          className={`w-full py-2 rounded-md text-white font-semibold transition ${
-            loading
-              ? "bg-blue-400 cursor-not-allowed"
-              : "bg-blue-500 hover:bg-blue-600"
-          }`}
-        >
-          {loading ? "Resetting..." : "Reset Password"}
-        </button>
-
-        {/* Back to login */}
-        <p
-          onClick={() => router.push("/")}
-          className="mt-4 text-sm text-gray-700 text-center cursor-pointer"
-        >
-          Remember your password?{" "}
-          <span className="text-blue-500 hover:underline">Log In</span>
-        </p>
-      </form>
+      </div>
     </div>
   );
 }

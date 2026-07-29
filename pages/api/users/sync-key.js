@@ -1,7 +1,10 @@
 import db from "../../../lib/db";
 import User from "../../../models/Users";
+import { applyRateLimit } from "../../../lib/rateLimit";
 
 export default async function handler(req, res) {
+  if (!applyRateLimit(req, res, { limit: 30, windowMs: 60000 })) return;
+
   await db();
 
   if (req.method !== "POST") {

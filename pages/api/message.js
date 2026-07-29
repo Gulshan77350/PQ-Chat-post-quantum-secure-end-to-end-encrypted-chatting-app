@@ -2,12 +2,16 @@ import db from "../../lib/db";
 import Message from "../../models/Message";
 import User from "../../models/Users";
 import { getIO, getSocketIdByUsername, getPresenceSnapshot } from "../../lib/socket";
+import { applyRateLimit } from "../../lib/rateLimit";
 
 export const config = {
   api: { bodyParser: { sizeLimit: "10mb" } },
 };
 
 export default async function handler(req, res) {
+  // Apply rate limiting (100 requests per minute for sending/fetching messages)
+  if (!applyRateLimit(req, res, { limit: 100, windowMs: 60000 })) return;
+
   await db();
 
   switch (req.method) {
@@ -73,10 +77,10 @@ export default async function handler(req, res) {
       }
     }
 
-    // ── FETCH HISTORY / RECENT CHATS ────────────────────────────────────────
+    // ── FETCH HISTORY / RECENT CHATS (WITH CURSOR PAGINATION) ────────────────
     case "GET": {
       try {
-        const { user1, user2, recent } = req.query;
+        const { user1, user2, recent, limit, before } = req.query;
 
         // Recent chat partners list
         if (recent && user1) {
@@ -117,7 +121,7 @@ export default async function handler(req, res) {
           return res.status(200).json(list);
         }
 
-        // Full chat history between two users
+        // Full chat history between two users with cursor-based pagination
         if (!user1 || !user2) {
           return res.status(400).json({ message: "Missing user params" });
         }
@@ -128,16 +132,33 @@ export default async function handler(req, res) {
         ]);
         if (!userA || !userB) return res.status(404).json({ message: "User not found" });
 
-        const messages = await Message.find({
+        const queryLimit = Math.min(parseInt(limit, 10) || 50, 100);
+        const queryFilter = {
           $or: [
             { sender: userA._id, receiver: userB._id },
             { sender: userB._id, receiver: userA._id },
           ],
-        })
+        };
+
+        if (before) {
+          queryFilter.createdAt = { $lt: new Date(before) };
+        }
+
+        // Fetch newest messages up to limit + 1 to determine if hasMore pages exist
+        const rawMessages = await Message.find(queryFilter)
           .populate("sender",   "username")
           .populate("receiver", "username")
-          .sort({ createdAt: 1 })
+          .sort({ createdAt: -1 })
+          .limit(queryLimit + 1)
           .lean();
+
+        const hasMore = rawMessages.length > queryLimit;
+        const messages = hasMore ? rawMessages.slice(0, queryLimit) : rawMessages;
+
+        // Reverse to chronological order (oldest -> newest) for display
+        messages.reverse();
+
+        const nextCursor = hasMore && messages.length > 0 ? messages[0].createdAt : null;
 
         // Mark as seen
         const updated = await Message.updateMany(
@@ -152,7 +173,11 @@ export default async function handler(req, res) {
           } catch (e) { console.warn("Socket emit skipped:", e.message); }
         }
 
-        return res.status(200).json(messages);
+        return res.status(200).json({
+          messages,
+          hasMore,
+          nextCursor,
+        });
       } catch (err) {
         console.error(err);
         return res.status(500).json({ message: "Server error" });

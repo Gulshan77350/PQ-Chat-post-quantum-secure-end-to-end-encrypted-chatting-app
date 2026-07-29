@@ -1,6 +1,6 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
-import { Eye, EyeOff, ShieldCheck, UserPlus, Download } from "lucide-react";
+import { Eye, EyeOff, ShieldCheck, UserPlus } from "lucide-react";
 import { useRouter } from "next/router";
 import { generateKeyPair, exportEncryptedKeyFile, saveSessionPrivateKey, toB64 } from "../lib/pqcrypto";
 
@@ -12,6 +12,24 @@ export default function RegisterPage() {
   const [loading, setLoading]           = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm]   = useState(false);
+
+  const getPasswordStrength = (pass) => {
+    if (!pass) return { label: "", score: 0, color: "", barColor: "" };
+    if (pass.length < 6) return { label: "Too short (min 6 chars)", score: 1, color: "text-rose-400", barColor: "bg-rose-500" };
+    
+    let score = 0;
+    if (pass.length >= 6) score++;
+    if (pass.length >= 8) score++;
+    if (/[A-Z]/.test(pass)) score++;
+    if (/[0-9]/.test(pass)) score++;
+    if (/[^A-Za-z0-9]/.test(pass)) score++;
+
+    if (score <= 2) return { label: "Weak", score: 1, color: "text-amber-400", barColor: "bg-amber-500" };
+    if (score <= 4) return { label: "Medium", score: 2, color: "text-emerald-400", barColor: "bg-emerald-400" };
+    return { label: "Strong", score: 3, color: "text-emerald-300", barColor: "bg-emerald-300" };
+  };
+
+  const strength = getPasswordStrength(password);
 
   const triggerDownload = (filename, textContent) => {
     const blob = new Blob([textContent], { type: "application/json" });
@@ -30,8 +48,12 @@ export default function RegisterPage() {
     if (!username.trim() || !password.trim() || !confirm.trim()) {
       toast.error("Please fill in all fields"); return;
     }
-    if (password !== confirm) { toast.error("Passwords do not match"); return; }
-    if (password.length < 6)  { toast.error("Password must be at least 6 characters"); return; }
+    if (password.length < 6) {
+      toast.error("Password must be at least 6 characters long"); return;
+    }
+    if (password !== confirm) {
+      toast.error("Passwords do not match"); return;
+    }
 
     setLoading(true);
     try {
@@ -82,11 +104,7 @@ export default function RegisterPage() {
           </div>
           <span className="auth-logo-text">PQChat</span>
         </div>
-        <p className="auth-subtitle">Create your post-quantum encrypted account</p>
-        <div className="text-xs text-emerald-400/90 bg-emerald-950/40 border border-emerald-500/20 p-2.5 rounded-lg mb-4 flex items-start gap-2">
-          <Download size={16} className="mt-0.5 shrink-0 text-emerald-400" />
-          <span>Registration generates a passphrase-wrapped <b>.pqkey</b> file downloaded to your system for non-custodial login.</span>
-        </div>
+        <p className="auth-subtitle">Create your account</p>
 
         <form onSubmit={handleRegister}>
           <div className="auth-field">
@@ -120,6 +138,22 @@ export default function RegisterPage() {
               </button>
             </div>
           </div>
+
+          {/* PASSWORD STRENGTH INDICATOR NEAR SUBMIT BUTTON */}
+          {password && (
+            <div className="mb-3 px-1">
+              <div className="flex items-center justify-between text-xs mb-1">
+                <span className="text-slate-400">Password strength:</span>
+                <span className={`font-semibold ${strength.color}`}>{strength.label}</span>
+              </div>
+              <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden flex">
+                <div
+                  className={`h-full transition-all duration-300 ${strength.barColor}`}
+                  style={{ width: `${(strength.score / 3) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
 
           <button type="submit" className="auth-btn" disabled={loading}>
             {loading

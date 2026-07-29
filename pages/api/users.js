@@ -3,10 +3,20 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import User from "../../models/Users";
 import { getIO, getPresenceSnapshot } from "../../lib/socket";
+import { applyRateLimit } from "../../lib/rateLimit";
 
-const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey123";
+const JWT_SECRET = process.env.JWT_SECRET;
 
 export default async function handler(req, res) {
+  // Apply rate limiting (20 requests per minute for auth/user management)
+  if (!applyRateLimit(req, res, { limit: 20, windowMs: 60000 })) return;
+
+  // Fail-closed enforcement: throw server error if JWT_SECRET is unconfigured
+  if (!JWT_SECRET) {
+    console.error("❌ CRITICAL: JWT_SECRET environment variable is missing.");
+    return res.status(500).json({ message: "Server error: JWT secret unconfigured." });
+  }
+
   try {
     await db(); // ensure DB connection
   } catch (err) {
@@ -21,25 +31,27 @@ export default async function handler(req, res) {
      * 🧩 REGISTER (POST /api/users)
      */
     case "POST":
-  try {
-    const { username, password, publicKey } = req.body;  // ← add publicKey
-    if (!username || !password)
-      return res.status(400).json({ message: "Username and password are required" });
+      try {
+        const { username, password, publicKey } = req.body;
+        if (!username || !password)
+          return res.status(400).json({ message: "Username and password are required" });
 
-    const existingUser = await User.findOne({ username });
-    if (existingUser)
-      return res.status(400).json({ message: "Username already exists" });
+        if (password.length < 6)
+          return res.status(400).json({ message: "Password must be at least 6 characters long" });
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = new User({
-      username: username.trim(),
-      password: hashedPassword,
-      publicKey: publicKey || null,   // ← save it
-      online: false,
-      socketId: null,
-    });
-    await newUser.save();
-    // ... rest unchanged
+        const existingUser = await User.findOne({ username });
+        if (existingUser)
+          return res.status(400).json({ message: "Username already exists" });
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const newUser = new User({
+          username: username.trim(),
+          password: hashedPassword,
+          publicKey: publicKey || null,
+          online: false,
+          socketId: null,
+        });
+        await newUser.save();
 
         // Broadcast to all connected clients (update user list)
         try {
@@ -78,7 +90,6 @@ export default async function handler(req, res) {
           { expiresIn: "1d" }
         );
 
-        // ✅ Optional: mark as recently active
         await User.findByIdAndUpdate(user._id, { lastSeen: new Date() });
 
         return res.status(200).json({
@@ -123,10 +134,8 @@ export default async function handler(req, res) {
           ? { username: { $regex: q, $options: "i" } }
           : {};
 
-        // Fetch all users except password
         const users = await User.find(filter).select("-password").lean();
 
-        // Merge socket presence
         const presence = getPresenceSnapshot();
         const merged = users.map((u) => ({
           ...u,
@@ -134,7 +143,6 @@ export default async function handler(req, res) {
           socketId: presence[u.username] || null,
         }));
 
-        // Sort online users first for better UX
         merged.sort((a, b) => b.online - a.online);
 
         return res.status(200).json(merged);

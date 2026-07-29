@@ -3,7 +3,7 @@ import { createServer } from "http";
 import next from "next";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
-import { initIO } from "./lib/socket.js"; // ✅ uses your existing socket.js (no need for extra handlers)
+import { initIO } from "./lib/socket.js";
 
 dotenv.config();
 
@@ -14,11 +14,20 @@ const port = process.env.PORT || 3000;
 
 app.prepare().then(async () => {
   try {
-    // ✅ MongoDB Connection
+    // ✅ Check MONGO_URI
     const mongoUri = process.env.MONGO_URI;
     if (!mongoUri) {
-      throw new Error("❌ Missing MONGO_URI in .env file");
+      throw new Error("❌ Missing MONGO_URI in environment variables");
     }
+
+    // ✅ Check JWT_SECRET (Fail-Closed Startup Enforcement)
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      throw new Error(
+        "❌ Missing JWT_SECRET in environment variables. Refusing startup in fail-closed security mode."
+      );
+    }
+
     await mongoose.connect(mongoUri);
     console.log("✅ Connected to MongoDB");
 
@@ -27,7 +36,7 @@ app.prepare().then(async () => {
       handle(req, res);
     });
 
-    // ✅ Initialize Socket.IO (uses your existing lib/socket.js)
+    // ✅ Initialize Socket.IO (uses restricted CORS)
     initIO(server);
 
     // ✅ Start listening

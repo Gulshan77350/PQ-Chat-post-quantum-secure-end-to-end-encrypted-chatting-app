@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
-import { ShieldCheck, MoreVertical, X, KeyRound, Trash2 } from "lucide-react";
+import { ShieldCheck, MoreVertical, X, KeyRound, Trash2, ArrowUpCircle } from "lucide-react";
 import UserList from "../components/UserList";
 import MessageBubble from "../components/MessageBubble";
 import ChatInput from "../components/ChatInput";
+import SafetyNumberModal from "../components/SafetyNumberModal";
 import { useRouter } from "next/router";
 import toast from "react-hot-toast";
 import useSocket from "../hooks/useSocket";
@@ -16,7 +17,11 @@ export default function Chat() {
   const [messages, setMessages] = useState([]);
   const [typingUser, setTypingUser] = useState(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState(null);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [showSafetyModal, setShowSafetyModal] = useState(false);
 
   const router = useRouter();
   const chatContainerRef = useRef(null);
@@ -174,22 +179,48 @@ export default function Chat() {
     return () => clearTimeout(typingTimeout);
   }, [socket, username, selectedUser]);
 
-  const fetchChatHistory = async (partner) => {
+  const fetchChatHistory = async (partner, beforeCursor = null) => {
     if (!username || !partner) return;
-    setLoadingMessages(true);
-    setMessages([]);
+
+    if (beforeCursor) {
+      setLoadingMore(true);
+    } else {
+      setLoadingMessages(true);
+      setMessages([]);
+    }
+
     try {
-      const res = await fetch(`/api/message?user1=${encodeURIComponent(username)}&user2=${encodeURIComponent(partner.username)}`);
-      const data = res.ok ? await res.json() : [];
-      setMessages(data || []);
+      let url = `/api/message?user1=${encodeURIComponent(username)}&user2=${encodeURIComponent(partner.username)}&limit=50`;
+      if (beforeCursor) url += `&before=${encodeURIComponent(beforeCursor)}`;
+
+      const res = await fetch(url);
+      const data = res.ok ? await res.json() : {};
+
+      const fetchedMsgs = Array.isArray(data) ? data : (data.messages || []);
+      const more = data.hasMore || false;
+      const cursor = data.nextCursor || null;
+
+      setHasMore(more);
+      setNextCursor(cursor);
+
+      if (beforeCursor) {
+        setMessages((prev) => [...fetchedMsgs, ...prev]);
+      } else {
+        setMessages(fetchedMsgs);
+        setTimeout(() => scrollToBottom(false), 40);
+      }
+
       await fetch("/api/messages/mark-seen", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user1: username, user2: partner.username }),
       });
-      setTimeout(() => scrollToBottom(false), 40);
-    } catch (err) { console.error(err); }
-    finally { setLoadingMessages(false); }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingMessages(false);
+      setLoadingMore(false);
+    }
   };
 
   const handleSelectUser = async (user) => {
@@ -211,7 +242,6 @@ export default function Chat() {
   const handleSend = async ({ ciphertext, iv, encryptedKey, senderEncryptedKey, plaintext }) => {
     if (!selectedUser || !ciphertext) return;
     try { localStorage.setItem("pqc_sent_" + ciphertext, plaintext); } catch (e) {}
-    // Optimistic update — show plaintext for sender, ciphertext stored in DB
     setMessages((prev) => [...prev, {
       sender: { username },
       receiver: { username: selectedUser.username },
@@ -313,7 +343,7 @@ export default function Chat() {
   useEffect(() => {
     const t = setTimeout(() => scrollToBottom(true), 40);
     return () => clearTimeout(t);
-  }, [messages]);
+  }, [messages.length]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -357,10 +387,14 @@ export default function Chat() {
               </div>
 
               <div className="chat-header-right">
-                <div className="e2e-pill">
+                <button
+                  onClick={() => setShowSafetyModal(true)}
+                  className="e2e-pill hover:border-emerald-400/60 cursor-pointer transition-all active:scale-95"
+                  title="Click to view Safety Number"
+                >
                   <KeyRound size={12} className="text-emerald-400" />
                   <span>PQC Non-Custodial</span>
-                </div>
+                </button>
 
                 <div ref={dropdownRef} className="relative">
                   <button onClick={() => setShowDropdown((s) => !s)} className="icon-btn">
@@ -368,6 +402,9 @@ export default function Chat() {
                   </button>
                   {showDropdown && (
                     <div className="header-dropdown">
+                      <button onClick={() => { setShowSafetyModal(true); setShowDropdown(false); }} className="dropdown-item">
+                        <ShieldCheck size={14} className="text-emerald-400" /> Safety Number
+                      </button>
                       <button onClick={handleClearChat} className="dropdown-item text-rose-400 hover:text-rose-300">
                         <Trash2 size={14} /> Clear Chat
                       </button>
@@ -382,6 +419,19 @@ export default function Chat() {
 
             {/* MESSAGES */}
             <div ref={chatContainerRef} className="messages-area">
+              {hasMore && (
+                <div className="text-center py-2">
+                  <button
+                    onClick={() => fetchChatHistory(selectedUser, nextCursor)}
+                    disabled={loadingMore}
+                    className="inline-flex items-center gap-1.5 text-xs bg-slate-800/90 hover:bg-slate-700 text-emerald-400 px-3 py-1.5 rounded-full border border-emerald-500/20 transition-all shadow-md active:scale-95 disabled:opacity-50"
+                  >
+                    {loadingMore ? <span className="spinner" /> : <ArrowUpCircle size={14} />}
+                    {loadingMore ? "Loading..." : "Load earlier messages"}
+                  </button>
+                </div>
+              )}
+
               {loadingMessages ? (
                 <div className="msg-loading">
                   <span className="spinner" />
@@ -448,6 +498,14 @@ export default function Chat() {
           </div>
         )}
       </div>
+
+      {/* SAFETY NUMBER MODAL */}
+      <SafetyNumberModal
+        isOpen={showSafetyModal}
+        onClose={() => setShowSafetyModal(false)}
+        currentUser={username}
+        peerUser={selectedUser}
+      />
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { Search, MoreVertical, LogOut, ShieldCheck } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { motion, AnimatePresence } from "framer-motion";
+import { clearSessionKeys } from "../lib/pqcrypto";
 
 export default function UserList({ users = [], allUsers = [], onSelectUser, username = "", activeUser = null, typingUser = null }) {
   const [showDropdown, setShowDropdown] = useState(false);
@@ -14,6 +15,7 @@ export default function UserList({ users = [], allUsers = [], onSelectUser, user
   const buttonRef = useRef(null);
 
   const handleLogout = () => {
+    if (username) clearSessionKeys(username);
     sessionStorage.removeItem("token");
     sessionStorage.removeItem("username");
     router.replace("/");

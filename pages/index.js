@@ -55,14 +55,15 @@ export default function Home() {
     e.preventDefault();
     const uname = username.trim();
     if (!uname || !password.trim()) {
+      alert("Please enter both your username and password.");
       toast.error("Please enter username and password");
       return;
     }
 
-    // Check if key is already in sessionStorage for this username
-    const existingSessionKey = loadPrivateKey(uname);
-    if (!existingSessionKey && !keyFileContent) {
-      toast.error("Please upload your .pqkey file to decrypt messages");
+    // MANDATORY PRIVATE KEY CHECK: Must upload .pqkey file to log in
+    if (!keyFileContent) {
+      alert("Private key file required! Please upload your .pqkey file to log in.");
+      toast.error("Private key file (.pqkey) is required for login");
       return;
     }
 
@@ -77,22 +78,22 @@ export default function Home() {
       const data = await res.json();
 
       if (!res.ok) {
+        alert(data.message || "Invalid credentials");
         toast.error(data.message || "Invalid credentials");
         setLoading(false);
         return;
       }
 
-      // 2. Decrypt private key using user's password if not already active in session
-      if (!existingSessionKey && keyFileContent) {
-        try {
-          const decryptedPrivateKey = await decryptKeyFile(password, keyFileContent);
-          saveSessionPrivateKey(data.username, decryptedPrivateKey);
-        } catch (decryptErr) {
-          console.error(decryptErr);
-          toast.error("Key file decryption failed. Check your password and keyfile.");
-          setLoading(false);
-          return;
-        }
+      // 2. Decrypt private key using user's password
+      try {
+        const decryptedPrivateKey = await decryptKeyFile(password, keyFileContent);
+        saveSessionPrivateKey(data.username, decryptedPrivateKey);
+      } catch (decryptErr) {
+        console.error(decryptErr);
+        alert("Key file decryption failed! Check that you uploaded the correct .pqkey file and password.");
+        toast.error("Key file decryption failed. Check your password and keyfile.");
+        setLoading(false);
+        return;
       }
 
       sessionStorage.setItem("token", data.token);
@@ -101,6 +102,7 @@ export default function Home() {
       router.push("/chat");
     } catch (err) {
       console.error(err);
+      alert("Server error during sign in.");
       toast.error("Server error during sign in.");
     } finally {
       setLoading(false);
@@ -151,10 +153,9 @@ export default function Home() {
 
           {/* KEYFILE UPLOADER */}
           <div className="auth-field">
-            <label className="auth-label">Private Key (.pqkey file)</label>
             <div
-              className={`border-2 border-dashed rounded-xl p-3 text-center cursor-pointer transition-all ${
-                isDragging ? "border-emerald-400 bg-emerald-950/40" : "border-emerald-500/20 bg-slate-900/40 hover:border-emerald-500/40"
+              className={`rounded-xl p-2.5 text-center cursor-pointer transition-all ${
+                isDragging ? "bg-emerald-950/60" : "bg-slate-900/60 hover:bg-slate-800/80"
               }`}
               onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
               onDragLeave={() => setIsDragging(false)}
@@ -169,14 +170,14 @@ export default function Home() {
                 onChange={handleFileChange}
               />
               {keyFileName ? (
-                <div className="flex items-center justify-center gap-2 text-emerald-400 text-sm font-medium">
-                  <CheckCircle2 size={16} />
+                <div className="flex items-center justify-center gap-2 text-emerald-400 text-xs font-medium">
+                  <CheckCircle2 size={15} />
                   <span>{keyFileName}</span>
                 </div>
               ) : (
-                <div className="flex flex-col items-center gap-1 text-xs text-slate-400">
-                  <Key size={18} className="text-emerald-400/80 mb-0.5" />
-                  <span>Drop your <b>.pqkey</b> file here or <span className="text-emerald-400 underline">browse</span></span>
+                <div className="flex items-center justify-center gap-1.5 text-xs text-slate-400 font-normal">
+                  <Key size={13} className="text-emerald-400/80" />
+                  <span>Upload your private key 📁</span>
                 </div>
               )}
             </div>
