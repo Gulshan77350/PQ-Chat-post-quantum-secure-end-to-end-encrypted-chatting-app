@@ -1,50 +1,41 @@
-// server.js — Unified entry point for production & Socket.IO backend
+// server.js — single entry point: Next.js pages/API + Socket.IO on one HTTP server.
 import { createServer } from "http";
 import next from "next";
-import mongoose from "mongoose";
 import dotenv from "dotenv";
+import db from "./lib/db.js";
 import { initIO } from "./lib/socket.js";
 
 dotenv.config();
 
-const dev = process.env.NODE_ENV !== "production";
-const app = next({ dev });
-const handle = app.getRequestHandler();
-const port = process.env.PORT || 3000;
+const dev = process.env.NODE_ENV !== "production" && !process.argv.includes("--production");
+if (!dev) process.env.NODE_ENV = "production";
+const port = parseInt(process.env.PORT, 10) || 3000;
 
-app.prepare().then(async () => {
-  try {
-    // ✅ Check MONGO_URI
-    const mongoUri = process.env.MONGO_URI;
-    if (!mongoUri) {
-      throw new Error("❌ Missing MONGO_URI in environment variables");
-    }
-
-    // ✅ Check JWT_SECRET (Fail-Closed Startup Enforcement)
-    const jwtSecret = process.env.JWT_SECRET;
-    if (!jwtSecret) {
-      throw new Error(
-        "❌ Missing JWT_SECRET in environment variables. Refusing startup in fail-closed security mode."
-      );
-    }
-
-    await mongoose.connect(mongoUri);
-    console.log("✅ Connected to MongoDB");
-
-    // ✅ Create HTTP + Next.js server
-    const server = createServer((req, res) => {
-      handle(req, res);
-    });
-
-    // ✅ Initialize Socket.IO (uses restricted CORS)
-    initIO(server);
-
-    // ✅ Start listening
-    server.listen(port, () => {
-      console.log(`🚀 Server running on http://localhost:${port}`);
-    });
-  } catch (error) {
-    console.error("❌ Server startup error:", error);
-    process.exit(1);
+async function main() {
+  // Fail closed: refuse to start without the secrets the security model depends on.
+  for (const name of ["MONGO_URI", "JWT_SECRET"]) {
+    if (!process.env[name]) throw new Error(`Missing ${name} in environment variables`);
   }
+  if (!dev && process.env.JWT_SECRET.length < 32) {
+    throw new Error("JWT_SECRET must be at least 32 characters in production");
+  }
+
+  const app = next({ dev });
+  const handle = app.getRequestHandler();
+  await app.prepare();
+
+  await db();
+  console.log("✅ Connected to MongoDB");
+
+  const server = createServer((req, res) => handle(req, res));
+  await initIO(server);
+
+  server.listen(port, () => {
+    console.log(`🚀 Server running on http://localhost:${port} (${dev ? "development" : "production"})`);
+  });
+}
+
+main().catch((error) => {
+  console.error("❌ Server startup error:", error);
+  process.exit(1);
 });

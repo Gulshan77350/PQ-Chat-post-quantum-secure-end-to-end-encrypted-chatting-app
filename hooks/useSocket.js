@@ -1,127 +1,59 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
+import { ensureAccessToken, refreshAccessToken } from "../lib/session";
 
-export default function useSocket(username) {
-  const socketRef = useRef(null);
-
-  // Event callback refs
-  const onUsersChangedRef = useRef(null);
-  const onMessageNewRef = useRef(null);
-  const onPresenceChangeRef = useRef(null);
-  const onTypingStartRef = useRef(null);
-  const onTypingStopRef = useRef(null);
-  const onMessagesSeenRef = useRef(null);
-  const onMessagesClearedRef = useRef(null);
-  const onConnectedRef = useRef(null);
+/**
+ * Opens an authenticated Socket.IO connection while `enabled` is true.
+ * The socket is held in React state (not a ref) so consumers re-render and re-subscribe
+ * when it changes — this keeps it correct under React Strict Mode's mount/unmount/mount.
+ * `onAuthError` fires when the server rejects the handshake (session revoked/expired).
+ */
+export default function useSocket(enabled, { onAuthError } = {}) {
+  const [socket, setSocket] = useState(null);
 
   useEffect(() => {
-    if (!username) return;
+    if (!enabled) return;
 
-    // Initialize socket once per user session
-    if (!socketRef.current) {
-      const socket = io({
-        auth: { username },
-        reconnection: true,
-        reconnectionAttempts: 10,
-        reconnectionDelay: 1000,
-        timeout: 15000,
-      });
+    const s = io({
+      // WebSocket-only: no long-polling, so no sticky sessions are needed behind a load balancer.
+      transports: ["websocket"],
+      // Called on every (re)connect, so reconnections always present a fresh token.
+      auth: (cb) => {
+        ensureAccessToken()
+          .then((token) => cb({ token }))
+          .catch(() => cb({ token: null }));
+      },
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
+    });
 
-      socketRef.current = socket;
-
-      // ✅ Connection established
-      socket.on("connect", () => {
-        console.log(`✅ Connected as ${username} (${socket.id})`);
-        // Ensure server knows this user is online
-        socket.emit("presence:online", { username });
-        onConnectedRef.current?.();
-      });
-
-      // ⚠️ Handle disconnect
-      socket.on("disconnect", (reason) => {
-        console.warn(`⚠️ Disconnected: ${reason}`);
-      });
-
-      // 🔁 When user list changes
-      socket.on("users:changed", () => {
-        onUsersChangedRef.current?.();
-      });
-
-      // 💬 New message event
-      socket.on("message:new", (payload) => {
-        onMessageNewRef.current?.(payload);
-      });
-
-      // 👥 Presence updates (real-time)
-      socket.on("presence:online", (p) => {
-        onPresenceChangeRef.current?.({ ...p, status: "online" });
-      });
-      socket.on("presence:offline", (p) => {
-        onPresenceChangeRef.current?.({ ...p, status: "offline" });
-      });
-
-      // 🧠 Initial presence snapshot (fix: load all users already online)
-      socket.on("presence:snapshot", (onlineUsers) => {
-        if (Array.isArray(onlineUsers)) {
-          onlineUsers.forEach((u) => {
-            onPresenceChangeRef.current?.({
-              username: u,
-              status: "online",
-            });
+    s.on("connect_error", (err) => {
+      // Middleware rejections don't auto-retry: mint a new token (the cached one may
+      // belong to a revoked session) and reconnect, or give up if the session is gone.
+      if (err?.message === "unauthorized") {
+        refreshAccessToken()
+          .then(() => s.connect())
+          .catch(() => {
+            s.disconnect();
+            onAuthError?.();
           });
-        }
-      });
-
-      // ✍️ Typing indicators
-      socket.on("typing:start", (data) => {
-        onTypingStartRef.current?.(data);
-      });
-      socket.on("typing:stop", (data) => {
-        onTypingStopRef.current?.(data);
-      });
-
-      // 👀 Seen message updates
-      socket.on("messages:seen", (data) => {
-        onMessagesSeenRef.current?.(data);
-      });
-
-      // 🗑️ Clear message updates
-      socket.on("messages:cleared", (data) => {
-        onMessagesClearedRef.current?.(data);
-      });
-    }
-
-    // Initialize Socket.IO API route (for Next.js)
-    fetch("/api/socket").catch(() => {});
-
-    // 🧹 Cleanup on unmount or username change
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
       }
+    });
+
+    // The server disconnects us when the access token expires or the session is
+    // revoked; reconnect (the auth callback fetches a new token or fails cleanly).
+    s.on("disconnect", (reason) => {
+      if (reason === "io server disconnect") setTimeout(() => s.connect(), 500);
+    });
+
+    setSocket(s);
+    return () => {
+      s.removeAllListeners();
+      s.disconnect();
+      setSocket(null);
     };
-  }, [username]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]);
 
-  // Subscription registration
-  const onUsersChanged = (cb) => { onUsersChangedRef.current = cb; };
-  const onMessageNew = (cb) => { onMessageNewRef.current = cb; };
-  const onPresenceChange = (cb) => { onPresenceChangeRef.current = cb; };
-  const onTypingStart = (cb) => { onTypingStartRef.current = cb; };
-  const onTypingStop = (cb) => { onTypingStopRef.current = cb; };
-  const onMessagesSeen = (cb) => { onMessagesSeenRef.current = cb; };
-  const onMessagesCleared = (cb) => { onMessagesClearedRef.current = cb; };
-  const onConnected = (cb) => { onConnectedRef.current = cb; };
-
-  return {
-    socket: socketRef.current,
-    onUsersChanged,
-    onMessageNew,
-    onPresenceChange,
-    onTypingStart,
-    onTypingStop,
-    onMessagesSeen,
-    onMessagesCleared,
-    onConnected,
-  };
+  return socket;
 }

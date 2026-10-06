@@ -2,7 +2,8 @@ import { useState } from "react";
 import toast from "react-hot-toast";
 import { Eye, EyeOff, ShieldCheck, UserPlus } from "lucide-react";
 import { useRouter } from "next/router";
-import { generateKeyPair, exportEncryptedKeyFile, saveSessionPrivateKey, toB64 } from "../lib/pqcrypto";
+import { generateKeyPair, exportEncryptedKeyFile, toB64 } from "../lib/pqcrypto";
+import { getPasswordStrength, downloadJson, MIN_PASSWORD_LENGTH } from "../lib/passwordStrength";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -13,43 +14,19 @@ export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm]   = useState(false);
 
-  const getPasswordStrength = (pass) => {
-    if (!pass) return { label: "", score: 0, color: "", barColor: "" };
-    if (pass.length < 6) return { label: "Too short (min 6 chars)", score: 1, color: "text-rose-400", barColor: "bg-rose-500" };
-    
-    let score = 0;
-    if (pass.length >= 6) score++;
-    if (pass.length >= 8) score++;
-    if (/[A-Z]/.test(pass)) score++;
-    if (/[0-9]/.test(pass)) score++;
-    if (/[^A-Za-z0-9]/.test(pass)) score++;
-
-    if (score <= 2) return { label: "Weak", score: 1, color: "text-amber-400", barColor: "bg-amber-500" };
-    if (score <= 4) return { label: "Medium", score: 2, color: "text-emerald-400", barColor: "bg-emerald-400" };
-    return { label: "Strong", score: 3, color: "text-emerald-300", barColor: "bg-emerald-300" };
-  };
-
   const strength = getPasswordStrength(password);
-
-  const triggerDownload = (filename, textContent) => {
-    const blob = new Blob([textContent], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
 
   const handleRegister = async (e) => {
     e.preventDefault();
-    if (!username.trim() || !password.trim() || !confirm.trim()) {
+    const uname = username.trim();
+    if (!uname || !password || !confirm) {
       toast.error("Please fill in all fields"); return;
     }
-    if (password.length < 6) {
-      toast.error("Password must be at least 6 characters long"); return;
+    if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(uname)) {
+      toast.error("Username: 3-32 letters, digits, _ . -"); return;
+    }
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      toast.error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters long`); return;
     }
     if (password !== confirm) {
       toast.error("Passwords do not match"); return;
@@ -57,36 +34,28 @@ export default function RegisterPage() {
 
     setLoading(true);
     try {
-      // 1. Generate Kyber-512 keypair in browser
-      const { publicKey, privateKey } = await generateKeyPair();
+      // 1. Generate the ML-KEM keypair in the browser. The private key never leaves it.
+      const { publicKey, privateKey, kem } = await generateKeyPair();
 
-      // 2. Encrypt private key with password using PBKDF2 + AES-GCM
-      const keyFileObj = await exportEncryptedKeyFile(username.trim(), password, privateKey);
-      const keyFileJSON = JSON.stringify(keyFileObj, null, 2);
+      // 2. Wrap the private key under the password (PBKDF2-SHA256 600k + AES-GCM).
+      const keyFile = await exportEncryptedKeyFile(uname, password, privateKey);
 
-      // 3. Trigger .pqkey file download to user's system
-      triggerDownload(`pqchat_${username.trim()}.pqkey`, keyFileJSON);
-
-      // 4. Save in sessionStorage for current session
-      saveSessionPrivateKey(username.trim(), privateKey);
-
-      // 5. Register with backend API — send ONLY public key
-      const res = await fetch("/api/users", {
+      // 3. Register with ONLY the public key.
+      const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: username.trim(),
-          password,
-          publicKey: toB64(publicKey),
-        }),
+        body: JSON.stringify({ username: uname, password, publicKey: toB64(publicKey), kem }),
       });
       const data = await res.json();
-      if (res.ok) {
-        toast.success("Account created! Save your downloaded .pqkey file securely.");
-        router.push("/");
-      } else {
+      if (!res.ok) {
         toast.error(data.message || "Registration failed");
+        return;
       }
+
+      // 4. Only after the account exists, hand the user their key file.
+      downloadJson(`pqchat_${uname}.pqkey`, keyFile);
+      toast.success("Account created! Keep your downloaded .pqkey file safe — it is required to sign in.", { duration: 6000 });
+      router.push("/");
     } catch (err) {
       console.error(err);
       toast.error("Error during registration & key generation");
@@ -109,7 +78,7 @@ export default function RegisterPage() {
         <form onSubmit={handleRegister}>
           <div className="auth-field">
             <label className="auth-label">Username</label>
-            <input className="auth-input" type="text" placeholder="choose_a_username"
+            <input className="auth-input" type="text" placeholder="choose_a_username" autoComplete="username"
               value={username} onChange={(e) => setUsername(e.target.value)} />
           </div>
 
