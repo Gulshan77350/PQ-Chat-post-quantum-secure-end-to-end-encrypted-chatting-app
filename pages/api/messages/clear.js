@@ -1,61 +1,33 @@
-import db from "../../../lib/db";
-import Message from "../../../models/Message";
-import User from "../../../models/Users";
-import { getIO } from "../../../lib/socket";
-import { applyRateLimit } from "../../../lib/rateLimit";
+import Message from "../../../models/Message.js";
+import Media from "../../../models/Media.js";
+import User from "../../../models/Users.js";
+import { apiRoute, requireUsername, HttpError } from "../../../lib/api.js";
+import { emitToUsers } from "../../../lib/realtime.js";
+import { deleteObject } from "../../../lib/storage.js";
 
-export default async function handler(req, res) {
-  if (!applyRateLimit(req, res, { limit: 20, windowMs: 60000 })) return;
+// POST /api/messages/clear { with } — permanently deletes the caller's conversation with
+// `with` (for both participants), including encrypted media blobs.
+export default apiRoute(
+  {
+    POST: async (req, res) => {
+      const partner = await User.findOne({ username: requireUsername(req.body?.with, "with") }).select("_id username").lean();
+      if (!partner) throw new HttpError(404, "User not found");
 
-  await db();
+      const filter = {
+        $or: [
+          { sender: req.user.id, receiver: partner._id },
+          { sender: partner._id, receiver: req.user.id },
+        ],
+      };
+      const mediaIds = (await Message.find({ ...filter, mediaId: { $ne: null } }).select("mediaId").lean()).map((m) => m.mediaId);
+      const result = await Message.deleteMany(filter);
+      await Promise.all(mediaIds.map(deleteObject));
+      if (mediaIds.length) await Media.deleteMany({ _id: { $in: mediaIds } });
 
-  if (req.method !== "POST" && req.method !== "DELETE") {
-    res.setHeader("Allow", ["POST", "DELETE"]);
-    return res.status(405).json({ success: false, message: "Method Not Allowed" });
-  }
-
-  try {
-    const { user1, user2 } = req.body;
-
-    if (!user1 || !user2) {
-      return res.status(400).json({ success: false, message: "Both usernames are required" });
-    }
-
-    const [u1, u2] = await Promise.all([
-      User.findOne({ username: user1 }),
-      User.findOne({ username: user2 }),
-    ]);
-
-    if (!u1 || !u2) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    // Delete all messages between user1 and user2
-    const result = await Message.deleteMany({
-      $or: [
-        { sender: u1._id, receiver: u2._id },
-        { sender: u2._id, receiver: u1._id },
-      ],
-    });
-
-    // Notify online clients in real-time
-    try {
-      const io = getIO();
-      if (io) {
-        io.to(user1).emit("messages:cleared", { by: user1, partner: user2 });
-        io.to(user2).emit("messages:cleared", { by: user1, partner: user1 });
-      }
-    } catch (err) {
-      console.warn("⚠️ Socket emit skipped:", err.message);
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Chat history cleared from database",
-      deletedCount: result.deletedCount,
-    });
-  } catch (err) {
-    console.error("❌ /api/messages/clear error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-}
+      emitToUsers([req.user.username], "messages:cleared", { by: req.user.username, partner: partner.username });
+      emitToUsers([partner.username], "messages:cleared", { by: req.user.username, partner: req.user.username });
+      return res.status(200).json({ deletedCount: result.deletedCount });
+    },
+  },
+  { rateLimit: { name: "messages-clear", limit: 20, windowMs: 60 * 1000 } }
+);

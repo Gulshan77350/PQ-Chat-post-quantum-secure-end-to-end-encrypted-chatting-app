@@ -1,5 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap');
 
+@import "tailwindcss/theme" layer(theme);
 @import "tailwindcss/preflight" layer(base);
 @import "tailwindcss/utilities" layer(utilities);
 
@@ -31,7 +32,8 @@
   --font-mono: 'IBM Plex Mono', monospace;
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+/* In the base layer so Tailwind utilities (utilities layer) can override it. */
+@layer base { * { box-sizing: border-box; margin: 0; padding: 0; } }
 html, body, #__next { height: 100%; }
 body {
   font-family: var(--font-body);

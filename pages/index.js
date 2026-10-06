@@ -1,8 +1,9 @@
 import { useState, useRef } from "react";
 import { useRouter } from "next/router";
 import toast from "react-hot-toast";
-import { Eye, EyeOff, ShieldCheck, Lock, Upload, Key, CheckCircle2 } from "lucide-react";
-import { decryptKeyFile, saveSessionPrivateKey, loadPrivateKey } from "../lib/pqcrypto";
+import { Eye, EyeOff, ShieldCheck, Lock, Key, CheckCircle2 } from "lucide-react";
+import { decryptKeyFile, saveSessionPrivateKey, proveKeyPossession } from "../lib/pqcrypto";
+import { setAccessToken } from "../lib/session";
 
 export default function Home() {
   const router = useRouter();
@@ -54,55 +55,64 @@ export default function Home() {
   const handleLogin = async (e) => {
     e.preventDefault();
     const uname = username.trim();
-    if (!uname || !password.trim()) {
-      alert("Please enter both your username and password.");
+    if (!uname || !password) {
       toast.error("Please enter username and password");
       return;
     }
-
-    // MANDATORY PRIVATE KEY CHECK: Must upload .pqkey file to log in
+    // The private key is a second factor: the server checks we hold it (see below).
     if (!keyFileContent) {
-      alert("Private key file required! Please upload your .pqkey file to log in.");
       toast.error("Private key file (.pqkey) is required for login");
+      return;
+    }
+    if (keyFileContent.username && keyFileContent.username !== uname) {
+      toast.error(`This key file belongs to "${keyFileContent.username}"`);
       return;
     }
 
     setLoading(true);
     try {
-      // 1. Authenticate credentials with server
-      const res = await fetch("/api/users", {
-        method: "PUT",
+      // 1. Unwrap the private key locally. The password never leaves the browser for this step.
+      let privateKey;
+      try {
+        privateKey = await decryptKeyFile(password, keyFileContent);
+      } catch (decryptErr) {
+        toast.error("Key file decryption failed. Check your password and key file.");
+        return;
+      }
+
+      // 2. Ask the server for an ML-KEM challenge encapsulated to our pinned public key,
+      //    and answer it by decapsulating with the private key (proof of possession).
+      const chRes = await fetch("/api/auth/challenge", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: uname, password }),
+        body: JSON.stringify({ username: uname }),
+      });
+      const challenge = await chRes.json();
+      if (!chRes.ok) {
+        toast.error(challenge.message || "Sign in failed");
+        return;
+      }
+      const proof = await proveKeyPossession(challenge, privateKey);
+
+      // 3. Password + proof → session (refresh cookie + in-memory access token).
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: uname, password, challengeId: challenge.challengeId, proof }),
       });
       const data = await res.json();
-
       if (!res.ok) {
-        alert(data.message || "Invalid credentials");
         toast.error(data.message || "Invalid credentials");
-        setLoading(false);
         return;
       }
 
-      // 2. Decrypt private key using user's password
-      try {
-        const decryptedPrivateKey = await decryptKeyFile(password, keyFileContent);
-        saveSessionPrivateKey(data.username, decryptedPrivateKey);
-      } catch (decryptErr) {
-        console.error(decryptErr);
-        alert("Key file decryption failed! Check that you uploaded the correct .pqkey file and password.");
-        toast.error("Key file decryption failed. Check your password and keyfile.");
-        setLoading(false);
-        return;
-      }
-
-      sessionStorage.setItem("token", data.token);
+      saveSessionPrivateKey(data.username, privateKey);
+      setAccessToken(data.accessToken);
       sessionStorage.setItem("username", data.username);
-      toast.success("Authenticated & Key Decrypted!");
+      toast.success("Authenticated & key verified");
       router.push("/chat");
     } catch (err) {
       console.error(err);
-      alert("Server error during sign in.");
       toast.error("Server error during sign in.");
     } finally {
       setLoading(false);
@@ -192,7 +202,7 @@ export default function Home() {
         <div style={{ textAlign: "center" }}>
           <button className="auth-link-btn" onClick={() => router.push("/register")}>Create account</button>
           &nbsp;·&nbsp;
-          <button className="auth-link-btn" onClick={() => router.push("/forgot_password")}>Forgot password</button>
+          <button className="auth-link-btn" onClick={() => router.push("/forgot_password")}>Forgot password?</button>
         </div>
       </div>
     </div>

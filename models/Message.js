@@ -5,30 +5,40 @@ const messageSchema = new mongoose.Schema(
     sender:   { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     receiver: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
 
-    // Encrypted ciphertext (AES-GCM). Never stored as plaintext.
-    text: { type: String, default: null },
+    // Encrypted text (AES-GCM ciphertext, base64). Never stored as plaintext.
+    text:               { type: String, default: null },
+    iv:                 { type: String, default: null },
+    encryptedKey:       { type: String, default: null }, // key container for receiver
+    senderEncryptedKey: { type: String, default: null }, // key container for sender
+    cryptoVersion:      { type: Number, default: null }, // null = legacy v1 payload
 
-    // AES-GCM fields for text decryption
-    iv:                 { type: String, default: null }, // base64 IV
-    encryptedKey:       { type: String, default: null }, // base64 key container for receiver
-    senderEncryptedKey: { type: String, default: null }, // base64 key container for sender
-
-    // Media fields
-    mediaData:         { type: String, default: null }, // encrypted base64
+    // Media: encrypted blob in object storage, referenced by mediaId.
+    mediaId:           { type: String, default: null },
     mediaIv:           { type: String, default: null },
-    mediaEncKey:       { type: String, default: null }, // base64 key container for receiver
-    senderMediaEncKey: { type: String, default: null }, // base64 key container for sender
-    mediaName:         { type: String, default: null },
-    mediaMimeType:     { type: String, default: null },
+    mediaEncKey:       { type: String, default: null },
+    senderMediaEncKey: { type: String, default: null },
     mediaSize:         { type: Number, default: null },
 
-    seen: { type: Boolean, default: false, index: true },
-    type: { type: String, enum: ["text", "image", "file", "video", "audio"], default: "text" },
+    // Legacy v1 media stored inline as base64 (read-only, kept for old messages).
+    mediaData:     { type: String, default: null },
+    mediaName:     { type: String, default: null },
+    mediaMimeType: { type: String, default: null },
+
+    type: { type: String, enum: ["text", "media", "image", "file", "video", "audio"], default: "text" },
+
+    // Delivery lifecycle: sent (createdAt) → delivered → seen
+    deliveredAt: { type: Date, default: null },
+    seenAt:      { type: Date, default: null },
+    seen:        { type: Boolean, default: false }, // kept in sync with seenAt for old clients
+
+    editedAt:  { type: Date, default: null },
+    deletedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
 
-messageSchema.index({ sender: 1, receiver: 1, createdAt: 1 });
-messageSchema.index({ receiver: 1, seen: 1 });
+messageSchema.index({ sender: 1, receiver: 1, createdAt: -1 });
+messageSchema.index({ receiver: 1, seenAt: 1 });
+messageSchema.index({ receiver: 1, deliveredAt: 1 });
 
 export default mongoose.models.Message || mongoose.model("Message", messageSchema);

@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from "react";
-import { Paperclip, Send, X, FileText, Image, Film, Music, ShieldCheck } from "lucide-react";
-import { encryptMessage, encryptMedia, loadPublicKey } from "../lib/pqcrypto";
+import { Paperclip, Send, X, FileText, Image, Film, Music, ShieldCheck, Pencil, ShieldAlert } from "lucide-react";
 import toast from "react-hot-toast";
 
-const MAX_FILE_SIZE = 8 * 1024 * 1024;
+// Ciphertext adds ~100 bytes of headers; the server's default cap is 25 MB.
+export const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 function getFileIcon(mimeType) {
   if (!mimeType) return <FileText size={16} />;
@@ -20,7 +20,14 @@ function formatBytes(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
-export default function ChatInput({ receiverUsername, onSend, onSendMedia, onTypingStart, onTypingStop }) {
+/**
+ * Pure input component — encryption happens in the parent, which owns the pinned peer key.
+ * Props:
+ *   onSendText(text), onSendFile(file, caption), onSubmitEdit(text)
+ *   editing: { id, text } | null, onCancelEdit()
+ *   disabledReason: string | null  (e.g. the peer's safety number changed)
+ */
+export default function ChatInput({ onSendText, onSendFile, onSubmitEdit, editing, onCancelEdit, onTypingStart, onTypingStop, disabledReason }) {
   const [message, setMessage]       = useState("");
   const [attachment, setAttachment] = useState(null);
   const [preview, setPreview]       = useState(null);
@@ -31,34 +38,31 @@ export default function ChatInput({ receiverUsername, onSend, onSendMedia, onTyp
   const fileInputRef     = useRef(null);
   const textareaRef      = useRef(null);
 
+  // Entering edit mode pre-fills the existing text.
+  useEffect(() => {
+    if (editing) {
+      setMessage(editing.text);
+      clearAttachment();
+      textareaRef.current?.focus();
+    }
+  }, [editing]);
+
   const handleTyping = (e) => {
     setMessage(e.target.value);
-    if (onTypingStart) onTypingStart();
+    if (editing) return;
+    onTypingStart?.();
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    typingTimeoutRef.current = setTimeout(() => {
-      if (onTypingStop) onTypingStop();
-    }, 1500);
+    typingTimeoutRef.current = setTimeout(() => onTypingStop?.(), 1500);
   };
 
-  const processFile = async (file) => {
+  const processFile = (file) => {
     if (file.size > MAX_FILE_SIZE) {
-      alert(`File too large. Max: ${formatBytes(MAX_FILE_SIZE)}`);
+      toast.error(`File too large. Max: ${formatBytes(MAX_FILE_SIZE)}`);
       return;
     }
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      setAttachment({ name: file.name, mimeType: file.type, size: file.size, arrayBuffer });
-      if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = e => setPreview(e.target.result);
-        reader.readAsDataURL(file);
-      } else {
-        setPreview(null);
-      }
-    } catch (err) {
-      console.error("File read failed:", err);
-      alert("Could not read file.");
-    }
+    setAttachment(file);
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(file.type.startsWith("image/") ? URL.createObjectURL(file) : null);
   };
 
   const handleFileChange = (e) => {
@@ -70,101 +74,56 @@ export default function ChatInput({ receiverUsername, onSend, onSendMedia, onTyp
   const handleDrop = (e) => {
     e.preventDefault();
     setDragOver(false);
+    if (disabledReason || editing) return;
     const file = e.dataTransfer.files?.[0];
     if (file) processFile(file);
   };
 
-  const clearAttachment = () => { setAttachment(null); setPreview(null); };
-
-  // Fetch public keys for receiver and sender
-  const getPublicKeys = async () => {
-    const senderUsername = sessionStorage.getItem("username");
-    const sessionSenderPk = loadPublicKey(senderUsername);
-
-    const res = await fetch(`/api/users`);
-    const users = await res.json();
-    const receiver = users.find(u => u.username === receiverUsername);
-    const sender   = users.find(u => u.username === senderUsername);
-
-    if (!receiver?.publicKey) {
-      toast.error("Receiver has no encryption key. Ask them to re-register.");
+  function clearAttachment() {
+    setAttachment(null);
+    setPreview((p) => {
+      if (p) URL.revokeObjectURL(p);
       return null;
-    }
+    });
+  }
 
-    const finalSenderPk = sessionSenderPk || sender?.publicKey;
-    if (!finalSenderPk) {
-      toast.error("Sender public key not found.");
-      return null;
-    }
-
-    // Auto-sync sender's public key if DB is out of date
-    if (sessionSenderPk && sender?.publicKey !== sessionSenderPk) {
-      fetch("/api/users/sync-key", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: senderUsername, publicKey: sessionSenderPk }),
-      }).catch(console.error);
-    }
-
-    return {
-      receiverPublicKey: receiver.publicKey,
-      senderPublicKey: finalSenderPk,
-    };
+  const cancelEdit = () => {
+    setMessage("");
+    onCancelEdit?.();
   };
 
   const handleSend = async () => {
     const trimmed = message.trim();
-    if (!trimmed && !attachment) return;
-    if (onTypingStop) onTypingStop();
+    if ((!trimmed && !attachment) || disabledReason) return;
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    onTypingStop?.();
 
     setSending(true);
     try {
-      const keys = await getPublicKeys();
-      if (!keys || !keys.receiverPublicKey) return;
-      const { receiverPublicKey, senderPublicKey } = keys;
-
-      if (attachment) {
-        // Encrypt file with receiver's and sender's Kyber public keys
-        const { encryptedBase64, iv, encryptedKey, senderEncryptedKey } = await encryptMedia(
-          attachment.arrayBuffer, receiverPublicKey, senderPublicKey
-        );
-        // Encrypt caption if present
-        let encText = null, textIv = null, textKey = null, senderTextKey = null;
-        if (trimmed) {
-          const r = await encryptMessage(trimmed, receiverPublicKey, senderPublicKey);
-          encText = r.ciphertext;
-          textIv = r.iv;
-          textKey = r.encryptedKey;
-          senderTextKey = r.senderEncryptedKey;
-        }
-        onSendMedia({
-          text: encText, textIv, textEncryptedKey: textKey, senderTextEncryptedKey: senderTextKey,
-          mediaData: encryptedBase64, iv, encryptedKey, senderMediaEncKey: senderEncryptedKey,
-          mediaName: attachment.name, mediaMimeType: attachment.mimeType,
-          mediaSize: attachment.size,
-          type: attachment.mimeType.startsWith("image/") ? "image"
-            : attachment.mimeType.startsWith("video/") ? "video"
-            : attachment.mimeType.startsWith("audio/") ? "audio"
-            : "file",
-        });
+      if (editing) {
+        if (trimmed !== editing.text) await onSubmitEdit(trimmed);
+        else onCancelEdit?.();
+      } else if (attachment) {
+        const file = attachment;
         clearAttachment();
+        setMessage("");
+        await onSendFile(file, trimmed);
+        return;
       } else {
-        // Encrypt text with receiver's and sender's Kyber public keys
-        const { ciphertext, iv, encryptedKey, senderEncryptedKey } = await encryptMessage(
-          trimmed, receiverPublicKey, senderPublicKey
-        );
-        onSend({ ciphertext, iv, encryptedKey, senderEncryptedKey, plaintext: trimmed });
+        setMessage("");
+        await onSendText(trimmed);
+        return;
       }
       setMessage("");
     } catch (err) {
       console.error("Send failed:", err);
-      toast.error("Failed to encrypt message.");
+      toast.error(err.message || "Failed to send message.");
     } finally {
       setSending(false);
     }
   };
 
-  const canSend = (message.trim() || attachment) && !sending;
+  const canSend = (message.trim() || attachment) && !sending && !disabledReason;
 
   useEffect(() => () => { if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current); }, []);
 
@@ -175,6 +134,17 @@ export default function ChatInput({ receiverUsername, onSend, onSendMedia, onTyp
     }
   }, [message]);
 
+  if (disabledReason) {
+    return (
+      <div className="pqc-input-zone">
+        <div className="flex items-center gap-2 text-xs text-rose-300 bg-rose-950/40 border border-rose-900/60 rounded-xl px-3 py-2.5">
+          <ShieldAlert size={14} className="shrink-0" />
+          <span>{disabledReason}</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`pqc-input-zone ${dragOver ? "drag-active" : ""}`}
@@ -182,20 +152,25 @@ export default function ChatInput({ receiverUsername, onSend, onSendMedia, onTyp
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
     >
+      {editing && (
+        <div className="flex items-center gap-2 text-xs text-emerald-300 mb-2 px-1">
+          <Pencil size={12} /> Editing message
+          <button onClick={cancelEdit} className="ml-auto text-slate-400 hover:text-slate-200"><X size={14} /></button>
+        </div>
+      )}
+
       {attachment && (
         <div className="attachment-preview">
-          <div className="attach-icon">{getFileIcon(attachment.mimeType)}</div>
+          <div className="attach-icon">{getFileIcon(attachment.type)}</div>
           {preview && <img src={preview} alt="preview" className="attach-thumb" />}
           <div className="attach-meta">
             <span className="attach-name">{attachment.name}</span>
             <span className="attach-size">
               <ShieldCheck size={10} className="inline mr-1 text-emerald-400" />
-              {formatBytes(attachment.size)} · will encrypt on send
+              {formatBytes(attachment.size)} · name & type encrypted too
             </span>
           </div>
-          <button onClick={clearAttachment} className="attach-remove">
-            <X size={14} />
-          </button>
+          <button onClick={clearAttachment} className="attach-remove"><X size={14} /></button>
         </div>
       )}
 
@@ -211,7 +186,7 @@ export default function ChatInput({ receiverUsername, onSend, onSendMedia, onTyp
           onClick={() => fileInputRef.current?.click()}
           className="attach-btn"
           title="Attach file"
-          disabled={sending}
+          disabled={sending || !!editing}
         >
           {sending ? <span className="encrypting-spinner" /> : <Paperclip size={18} />}
         </button>
@@ -223,9 +198,11 @@ export default function ChatInput({ receiverUsername, onSend, onSendMedia, onTyp
           onChange={handleTyping}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+            if (e.key === "Escape" && editing) cancelEdit();
           }}
-          placeholder={attachment ? "Add a caption… (optional)" : "Type a message…"}
+          placeholder={editing ? "Edit message…" : attachment ? "Add a caption… (optional)" : "Type a message…"}
           className="msg-textarea"
+          maxLength={20000}
         />
 
         <button
